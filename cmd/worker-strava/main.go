@@ -171,7 +171,12 @@ func registerHandlers(w *workersdk.Worker, cfg workerConfig, client *stravaClien
 		jobImportGear:  makeImportGearHandler(cfg, client),
 	}
 	for job, fn := range handlers {
-		w.Handle(w.JobSubject(job), fn)
+		if job == jobParseBlob {
+			// parser_too_old hands the job back parserTooOldAttempts times.
+			w.HandleWithMaxDeliver(w.JobSubject(job), fn, parserTooOldAttempts+2)
+		} else {
+			w.Handle(w.JobSubject(job), fn)
+		}
 		// Pre-0.5 subject, drained once after the upgrade. Remove in 0.6.
 		w.HandleLegacy("cairn.jobs."+job+"."+workerProvider, fn)
 	}

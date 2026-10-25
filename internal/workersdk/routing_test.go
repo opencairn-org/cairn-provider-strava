@@ -57,3 +57,15 @@ func TestCoreReleaseCheck(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 }
+
+func TestHandleWithMaxDeliver(t *testing.T) {
+	w, err := New(Config{Name: "w1", Provider: "strava", Bus: inmem.New()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.HandleWithMaxDeliver(w.JobSubject("parse_blob"), func(context.Context, *Worker, Job) error { return nil }, 12)
+	w.Handle(w.JobSubject("fetch_source"), func(context.Context, *Worker, Job) error { return nil })
+	if w.maxDeliver[w.JobSubject("parse_blob")] != 12 || w.maxDeliver[w.JobSubject("fetch_source")] != 0 {
+		t.Fatalf("maxDeliver = %v", w.maxDeliver)
+	}
+}

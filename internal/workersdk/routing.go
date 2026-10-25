@@ -47,6 +47,14 @@ func (w *Worker) DiscoverSubject() string {
 	return "cairn.discover." + w.cfg.Provider + "." + w.cfg.Name
 }
 
+// HandleWithMaxDeliver is Handle with a per-subject redelivery cap: a job
+// that is handed back on purpose (parser_too_old) needs more deliveries than
+// the bus default before it is dead-lettered.
+func (w *Worker) HandleWithMaxDeliver(subject string, fn HandlerFunc, maxDeliver int) {
+	w.Handle(subject, fn)
+	w.maxDeliver[subject] = maxDeliver
+}
+
 // HandleLegacy drains a pre-0.5 provider-only subject with the old durable,
 // so jobs queued before the upgrade are not stranded. Failure to subscribe
 // is logged, not fatal. Remove in 0.6.

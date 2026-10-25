@@ -154,12 +154,14 @@ type Worker struct {
 	handlers map[string]HandlerFunc
 
 	// lifecycle
-	pulls    []port.PullSubscription
-	wg       sync.WaitGroup
-	stopCh   chan struct{}
-	legacy   map[string]HandlerFunc
-	fatal    chan error
-	stopOnce sync.Once
+	pulls  []port.PullSubscription
+	wg     sync.WaitGroup
+	stopCh chan struct{}
+	legacy map[string]HandlerFunc
+	// maxDeliver overrides the consumer's MaxDeliver per subject (0 = bus default).
+	maxDeliver map[string]int
+	fatal      chan error
+	stopOnce   sync.Once
 
 	// webhooks holds optional WebhookEvent/WebhookVerify registrations
 	// set by WebhookEvent() / WebhookVerify() before Run. Started by
@@ -201,12 +203,13 @@ func New(cfg Config) (*Worker, error) {
 	}
 
 	w := &Worker{
-		cfg:      cfg,
-		logger:   cfg.Logger.With("worker", cfg.Name, "instance", cfg.InstanceID),
-		handlers: map[string]HandlerFunc{},
-		stopCh:   make(chan struct{}),
-		legacy:   map[string]HandlerFunc{},
-		fatal:    make(chan error, 1),
+		cfg:        cfg,
+		logger:     cfg.Logger.With("worker", cfg.Name, "instance", cfg.InstanceID),
+		handlers:   map[string]HandlerFunc{},
+		stopCh:     make(chan struct{}),
+		legacy:     map[string]HandlerFunc{},
+		maxDeliver: map[string]int{},
+		fatal:      make(chan error, 1),
 	}
 	w.tokens = newTokenCache(cfg.Bus, cfg.Provider, cfg.Auth, cfg.TokenFetchTimeout, w.logger)
 	return w, nil
@@ -328,6 +331,7 @@ func (w *Worker) startPull(ctx context.Context, subject string, fn HandlerFunc) 
 		Durable:       consumerName(w.cfg.Name, subject),
 		Subject:       subject,
 		DeliverPolicy: port.DeliverAll,
+		MaxDeliver:    w.maxDeliver[subject],
 	})
 	if err != nil {
 		return fmt.Errorf("subscribe %s: %w", subject, err)
