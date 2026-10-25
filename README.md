@@ -56,6 +56,18 @@ export CAIRN_WORKER_ENROLLMENT_TOKEN=...   # from POST /admin/worker-enrollments
 go run ./cmd/worker-strava
 ```
 
+## Versioning
+
+Three versions, defined in [core ADR 0005](https://github.com/opencairn-org/cairn-core/blob/main/docs/adr/0005-provider-versioning.md)
+and the [provider contract](https://docs.opencairn.org/architecture/provider-contract#versioning):
+
+- **Release** (`vX.Y.Z`, the git tag): major.minor must match core.
+- **Dataset** (`N`, the archive envelope `version`): bump only when the parser
+  can no longer read the previous archive format.
+- **Parser** (`N.M`, sent as `worker_version`): bump `M` with **every** change
+  to the parsed output; a dataset bump resets it to `N.0`. Parser `N.x` must
+  read every dataset `N` archive. Versions only move forward.
+
 ## Develop
 
 `make check` is the definition of green (lint, race tests, coverage floor,
