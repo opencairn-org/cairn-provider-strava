@@ -168,7 +168,7 @@ func fetchJob(in fetchSourceJob) workersdk.Job {
 	return workersdk.Job{Subject: "cairn.jobs.fetch_source.strava.strava-fetcher", Body: body, DeliveryAttempt: 1}
 }
 
-const resultsFetch = "cairn.results.fetch_source.strava"
+const resultsFetch = "cairn.results.fetch_source.strava.strava-fetcher"
 
 // activityEvent returns the result's ACTIVITY event (gear events precede it).
 func activityEvent(t *testing.T, res *workerv1.JobResult) *workerv1.ImportedActivity {
@@ -379,13 +379,13 @@ func TestFetchSource_BudgetExhaustion(t *testing.T) {
 	in := fetchSourceJob{JobID: "j", ExtID: "42", FetchStreams: true}
 	var nak *port.NakWithDelayError
 
-	h2, _ := limitedHarness(t, &stravaAPI{}, map[string]int{"strava:short": 1})
+	h2, _ := limitedHarness(t, &stravaAPI{}, map[string]int{rateBucket("short"): 1})
 	if err := makeFetchSourceHandler(workerConfig{}, h2.client)(context.Background(), h2.w, fetchJob(in)); !errors.As(err, &nak) {
 		t.Errorf("streams reserve: err = %v", err)
 	}
 
 	// Activity, streams and photos fit; the first segment does not.
-	h3, store := limitedHarness(t, &stravaAPI{}, map[string]int{"strava:short": 3})
+	h3, store := limitedHarness(t, &stravaAPI{}, map[string]int{rateBucket("short"): 3})
 	err := makeFetchSourceHandler(workerConfig{}, h3.client)(context.Background(), h3.w, fetchJob(in))
 	if !errors.As(err, &nak) || nak.Reason != "rate_limited_segments" {
 		t.Errorf("segment reserve: err = %v", err)
@@ -394,7 +394,7 @@ func TestFetchSource_BudgetExhaustion(t *testing.T) {
 		t.Errorf("results = %d; want activity only", n)
 	}
 
-	h4, _ := limitedHarness(t, &stravaAPI{}, map[string]int{"strava:daily": 1})
+	h4, _ := limitedHarness(t, &stravaAPI{}, map[string]int{rateBucket("daily"): 1})
 	_ = makeFetchSourceHandler(workerConfig{}, h4.client)(context.Background(), h4.w, fetchJob(fetchSourceJob{JobID: "a", ExtID: "42"}))
 	if err := makeFetchSourceHandler(workerConfig{}, h4.client)(context.Background(), h4.w, fetchJob(fetchSourceJob{JobID: "b", ExtID: "42"})); !errors.As(err, &nak) {
 		t.Errorf("daily budget: err = %v", err)
@@ -425,7 +425,7 @@ func TestParseBlob(t *testing.T) {
 	if err := handler(ctx, h.w, parseJob(t, in)); err != nil {
 		t.Fatalf("fresh url: %v", err)
 	}
-	res := store.results(t, h, "cairn.results.parse_blob.strava")
+	res := store.results(t, h, "cairn.results.parse_blob.strava.strava-fetcher")
 	if len(res) != 1 || len(res[0].GetEvents()) != 2 || res[0].GetEvents()[1].GetActivity().GetRef().GetExternalId() != "77" {
 		t.Fatalf("results = %v", res)
 	}
@@ -492,6 +492,17 @@ func TestParseBlob_VersionGuards(t *testing.T) {
 	if err := handler(ctx, h.w, parseJob(t, in)); !errors.As(err, &nak) || nak.Reason != "parser_too_old" {
 		t.Fatalf("newer source: err = %v", err)
 	}
+	// After the back-off window the job is failed with parser_too_old so core
+	// keeps the source flagged.
+	tooOld := parseJob(t, in)
+	tooOld.DeliveryAttempt = parserTooOldAttempts
+	var exhausted *port.TerminalError
+	if err := handler(ctx, h.w, tooOld); !errors.As(err, &exhausted) || exhausted.Reason != "parser_too_old" {
+		t.Fatalf("exhausted: err = %v", err)
+	}
+	if parserTooOldBackoff(1) != 30*time.Second || parserTooOldBackoff(99) != 10*time.Minute {
+		t.Error("backoff bounds")
+	}
 
 	// An archive of another dataset is unreadable for this parser.
 	future, _ := json.Marshal(archivedActivity{Version: datasetVersion + 1, Activity: &stravaActivity{ID: 1}})
@@ -502,7 +513,7 @@ func TestParseBlob_VersionGuards(t *testing.T) {
 	if err := handler(ctx, h.w, parseJob(t, in)); !errors.As(err, &term) || term.Reason != "dataset_mismatch" {
 		t.Fatalf("other dataset: err = %v", err)
 	}
-	if res := store.results(t, h, "cairn.results.parse_blob.strava"); len(res) != 0 {
+	if res := store.results(t, h, "cairn.results.parse_blob.strava.strava-fetcher"); len(res) != 0 {
 		t.Fatalf("guarded jobs published results: %v", res)
 	}
 }

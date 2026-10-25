@@ -26,7 +26,7 @@ func TestImportGear_PublishesEveryGear(t *testing.T) {
 	if err := handler(context.Background(), h.w, gearJob(importGearJob{JobID: "g1", AccountID: "acct", UserID: "u1"})); err != nil {
 		t.Fatalf("import_gear: %v", err)
 	}
-	msgs := h.published("cairn.results.import_gear.strava")
+	msgs := h.published("cairn.results.import_gear.strava.strava-fetcher")
 	if len(msgs) != 1 {
 		t.Fatalf("published %d results", len(msgs))
 	}
@@ -71,7 +71,7 @@ func TestImportGear_Errors(t *testing.T) {
 	if err := handler(context.Background(), h.w, gearJob(importGearJob{JobID: "g3", AccountID: "acct"})); err == nil {
 		t.Error("athlete 500: want an error (retry)")
 	}
-	if len(h.published("cairn.results.import_gear.strava")) != 0 {
+	if len(h.published("cairn.results.import_gear.strava.strava-fetcher")) != 0 {
 		t.Error("nothing should be published on failure")
 	}
 }

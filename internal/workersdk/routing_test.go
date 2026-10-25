@@ -32,9 +32,24 @@ func TestCoreReleaseCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	for release, wantErr := range map[string]bool{"v0.5.9": false, "v0.4.3": true, "v1.5.0": true, "": false, "abc123": false} {
+		if _, err := kv.Put(ctx, "info", []byte(`{"release":"v0.5.2"}`)); err != nil {
+			t.Fatal(err)
+		}
 		err := newW(release).checkCoreRelease(ctx)
 		if errors.Is(err, ErrIncompatibleCore) != wantErr {
 			t.Errorf("%q: err = %v", release, err)
+		}
+	}
+	// 1.x: an older worker minor works, a newer one does not.
+	for _, c := range []struct {
+		core, worker string
+		want         bool
+	}{
+		{"v1.3.0", "v1.1.0", true}, {"v1.3.0", "v1.3.2", true}, {"v1.3.0", "v1.4.0", false}, {"v2.0.0", "v1.9.0", false},
+		{"v0.5.0", "v0.6.0", false},
+	} {
+		if got := ReleaseCompatible(c.core, c.worker); got != c.want {
+			t.Errorf("ReleaseCompatible(%s, %s) = %v", c.core, c.worker, got)
 		}
 	}
 	// Run refuses to start against an incompatible core.

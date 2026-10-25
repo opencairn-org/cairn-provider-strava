@@ -116,7 +116,7 @@ func TestRateLimitReset_DailyVsShort(t *testing.T) {
 		"X-ReadRateLimit-Limit": "100,1000",
 		"X-ReadRateLimit-Usage": "100,613",
 	}, now)
-	if bucket != "strava:short" {
+	if bucket != rateBucket("short") {
 		t.Errorf("bucket = %s, want strava:short", bucket)
 	}
 	if want := time.Date(2026, 7, 6, 12, 30, 5, 0, time.UTC); !reset.Equal(want) {
@@ -128,7 +128,7 @@ func TestRateLimitReset_DailyVsShort(t *testing.T) {
 		"X-ReadRateLimit-Limit": "100,1000",
 		"X-ReadRateLimit-Usage": "87,1000",
 	}, now)
-	if bucket != "strava:daily" {
+	if bucket != rateBucket("daily") {
 		t.Errorf("bucket = %s, want strava:daily", bucket)
 	}
 	if want := time.Date(2026, 7, 7, 0, 0, 5, 0, time.UTC); !reset.Equal(want) {
@@ -137,7 +137,7 @@ func TestRateLimitReset_DailyVsShort(t *testing.T) {
 
 	// No headers at all: assume the short window.
 	_, bucket = rateLimitReset(map[string]string{}, now)
-	if bucket != "strava:short" {
+	if bucket != rateBucket("short") {
 		t.Errorf("bucket = %s, want strava:short", bucket)
 	}
 }

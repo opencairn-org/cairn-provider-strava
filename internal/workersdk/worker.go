@@ -836,16 +836,13 @@ func consumerName(worker, subject string) string {
 // Logger returns the worker's structured logger so handlers can log.
 func (w *Worker) Logger() *slog.Logger { return w.logger }
 
-// deriveResultSubject converts a job subject into the canonical result
-// subject. Results are provider-scoped, so the pool token is dropped:
-// "cairn.jobs.fetch_source.strava.w1" → "cairn.results.fetch_source.strava".
+// deriveResultSubject converts a job subject into its result subject; the
+// pool token stays (results are per pool, cairn-core ADR 0006):
+// "cairn.jobs.fetch_source.strava.w1" → "cairn.results.fetch_source.strava.w1".
 func deriveResultSubject(jobSubject string) string {
 	rest, ok := strings.CutPrefix(jobSubject, "cairn.jobs.")
 	if !ok || rest == "" {
 		return jobSubject + ".result"
-	}
-	if parts := strings.SplitN(rest, ".", 3); len(parts) >= 2 {
-		rest = parts[0] + "." + parts[1]
 	}
 	return "cairn.results." + rest
 }

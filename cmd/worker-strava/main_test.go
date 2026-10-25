@@ -78,7 +78,7 @@ func TestRegisterHandlers_SyncsUsageAndWebhooks(t *testing.T) {
 	registerHandlers(w, workerConfig{WorkerName: workerName}, client, quietLogger())
 
 	client.onUsage(10, 100, 20, 1000)
-	for _, key := range []string{"strava.short", "strava.daily"} {
+	for _, key := range []string{"strava.strava-fetcher.short", "strava.strava-fetcher.daily"} {
 		if _, err := kv.Get(context.Background(), key); err != nil {
 			t.Errorf("usage not synced to %s: %v", key, err)
 		}
@@ -369,7 +369,7 @@ func TestMirrorPhoto_Failures(t *testing.T) {
 	}
 	offline := newStravaClient()
 	offline.baseURL = "http://127.0.0.1:1"
-	if got := listActivityPhotos(ctx, bare, offline, "t", "strava:short", "1", nil); got != nil {
+	if got := listActivityPhotos(ctx, bare, offline, "t", rateBucket("short"), "1", nil); got != nil {
 		t.Error("no photos and no activity must yield nil")
 	}
 }

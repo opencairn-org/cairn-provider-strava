@@ -76,6 +76,12 @@ const (
 	jobImportGear  = "import_gear"
 )
 
+// rateBucketPool is the pool name in rate-limit bucket keys: budgets are per
+// pool, i.e. per provider app (core reads <provider>.<pool>.<window>).
+var rateBucketPool = workerName
+
+func rateBucket(window string) string { return workerProvider + ":" + rateBucketPool + ":" + window }
+
 // workerRelease is the release tag, stamped at build time
 // (-ldflags "-X main.workerRelease=v0.5.0"); core requires the same major.minor.
 var workerRelease = ""
@@ -95,6 +101,7 @@ func main() {
 }
 
 func run(cfg workerConfig, logger *slog.Logger) error {
+	rateBucketPool = cfg.WorkerName
 	bus, err := connectBus(cfg, logger)
 	if err != nil {
 		return fmt.Errorf("connect bus: %w", err)
@@ -153,8 +160,8 @@ func registerHandlers(w *workersdk.Worker, cfg workerConfig, client *stravaClien
 	client.onUsage = func(usedShort, limitShort, usedDaily, limitDaily int) {
 		bg := context.Background()
 		now := time.Now().UTC()
-		_ = w.ObserveUsage(bg, "strava:short", usedShort, limitShort, nextQuarterHour(now))
-		_ = w.ObserveUsage(bg, "strava:daily", usedDaily, limitDaily, nextMidnightUTC(now))
+		_ = w.ObserveUsage(bg, rateBucket("short"), usedShort, limitShort, nextQuarterHour(now))
+		_ = w.ObserveUsage(bg, rateBucket("daily"), usedDaily, limitDaily, nextMidnightUTC(now))
 	}
 	handlers := map[string]workersdk.HandlerFunc{
 		jobFetchSource: makeFetchSourceHandler(cfg, client),

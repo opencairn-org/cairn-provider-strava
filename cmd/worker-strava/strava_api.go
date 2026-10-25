@@ -531,9 +531,9 @@ func rateLimitReset(headers map[string]string, now time.Time) (time.Time, string
 		usage, ok2 = parseUsagePair(headers["X-RateLimit-Usage"])
 	}
 	if ok && ok2 && limits[1] > 0 && usage[1] >= limits[1] {
-		return nextMidnightUTC(now), "strava:daily"
+		return nextMidnightUTC(now), rateBucket("daily")
 	}
-	return nextQuarterHour(now), "strava:short"
+	return nextQuarterHour(now), rateBucket("short")
 }
 
 // classifyRateLimit reads the Retry-After header (RFC 7231 §7.1.3 — either

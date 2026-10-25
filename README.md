@@ -61,7 +61,10 @@ go run ./cmd/worker-strava
 Three versions, defined in [core ADR 0005](https://github.com/opencairn-org/cairn-core/blob/main/docs/adr/0005-provider-versioning.md)
 and the [provider contract](https://docs.opencairn.org/architecture/provider-contract#versioning):
 
-- **Release** (`vX.Y.Z`, the git tag): major.minor must match core.
+- **Release** (`vX.Y.Z`, the git tag): before 1.0 major.minor must match
+  core; from 1.0 on, same major and the worker's minor not above core's
+  (minor and patch releases are backwards compatible). The worker refuses to
+  start against an incompatible core.
 - **Dataset** (`N`, the archive envelope `version`): bump only when the parser
   can no longer read the previous archive format.
 - **Parser** (`N.M`, sent as `worker_version`): bump `M` with **every** change
@@ -72,8 +75,12 @@ and the [provider contract](https://docs.opencairn.org/architecture/provider-con
   TestParserGolden -update` writes the new goldens (delete the old ones).
 
 Jobs are routed per pool (core ADR 0006): this worker consumes
-`cairn.jobs.<job>.strava.<CAIRN_WORKER_NAME>`. Instances sharing a name share
-the work; a second name is a separate pool that core assigns accounts to.
+`cairn.jobs.<job>.strava.<CAIRN_WORKER_NAME>` and publishes results on
+`cairn.results.<job>.strava.<CAIRN_WORKER_NAME>`. Instances sharing a name
+share the work; a second name is a separate pool that core assigns accounts
+to. The name is permanent: core binds it to this package, so a different
+implementation needs a new name. Rate-limit budgets are per pool
+(`strava:<name>:short|daily|webhook` in the shared KV), i.e. per Strava app.
 
 ## Develop
 

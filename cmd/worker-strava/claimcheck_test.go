@@ -42,7 +42,7 @@ func TestPublishResultViaBlob_UploadsBodyAndPublishesEnvelope(t *testing.T) {
 	}
 
 	var published port.Message
-	if _, err := bus.Subscribe(ctx, port.ConsumerConfig{Subject: "cairn.results.fetch_source.strava"}, func(_ context.Context, m port.Message) error {
+	if _, err := bus.Subscribe(ctx, port.ConsumerConfig{Subject: "cairn.results.fetch_source.strava.strava-fetcher"}, func(_ context.Context, m port.Message) error {
 		published = m
 		return nil
 	}); err != nil {
@@ -63,7 +63,7 @@ func TestPublishResultViaBlob_UploadsBodyAndPublishesEnvelope(t *testing.T) {
 			}},
 		}},
 	}
-	job := workersdk.Job{Subject: "cairn.jobs.fetch_source.strava"}
+	job := workersdk.Job{Subject: "cairn.jobs.fetch_source.strava.strava-fetcher"}
 	if err := publishResultViaBlob(ctx, w, job, "result:j1:d1", full); err != nil {
 		t.Fatalf("publishResultViaBlob: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestPublishFailureResult_PublishesErrorEnvelope(t *testing.T) {
 	bus := inmem.New()
 
 	var published port.Message
-	if _, err := bus.Subscribe(ctx, port.ConsumerConfig{Subject: "cairn.results.fetch_source.strava"}, func(_ context.Context, m port.Message) error {
+	if _, err := bus.Subscribe(ctx, port.ConsumerConfig{Subject: "cairn.results.fetch_source.strava.strava-fetcher"}, func(_ context.Context, m port.Message) error {
 		published = m
 		return nil
 	}); err != nil {
@@ -118,7 +118,7 @@ func TestPublishFailureResult_PublishesErrorEnvelope(t *testing.T) {
 	}
 
 	in := fetchSourceJob{JobID: "j1", AccountID: "acc-1", UserID: "u-1", ExtID: "42"}
-	job := workersdk.Job{Subject: "cairn.jobs.fetch_source.strava", DeliveryAttempt: 2}
+	job := workersdk.Job{Subject: "cairn.jobs.fetch_source.strava.strava-fetcher", DeliveryAttempt: 2}
 	publishFailureResult(ctx, w, workerConfig{WorkerName: "strava-fetcher"}, job, in, "needs_reauth", nil)
 
 	var env workerv1.JobResult

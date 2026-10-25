@@ -193,7 +193,7 @@ func lookupAccountByOwnerID(
 	if err != nil {
 		return "", "", err
 	}
-	resp, err := w.Request(ctx, "cairn.accounts.lookup_by_provider_ext", req, 1*time.Second)
+	resp, err := w.Request(ctx, w.LookupSubject(), req, 1*time.Second)
 	if err != nil {
 		return "", "", err
 	}

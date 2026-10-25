@@ -130,7 +130,7 @@ func TestBackfill_StopsOnShortPageAndPublishesResult(t *testing.T) {
 	if len(queries) != 2 {
 		t.Errorf("listed %d pages; want 2 (short page ends the walk)", len(queries))
 	}
-	if got := h.published("cairn.results.backfill.strava"); len(got) != 1 {
+	if got := h.published("cairn.results.backfill.strava.strava-fetcher"); len(got) != 1 {
 		t.Fatalf("published %d backfill results; want 1", len(got))
 	}
 }
@@ -158,7 +158,7 @@ func TestBackfill_ListingNotFoundAcksWithoutResult(t *testing.T) {
 	if err := makeBackfillHandler(workerConfig{}, h.client)(context.Background(), h.w, workersdk.Job{Subject: "cairn.jobs.backfill.strava.strava-fetcher", Body: body}); err != nil {
 		t.Fatalf("backfill: %v; want nil (ack)", err)
 	}
-	if got := h.published("cairn.results.backfill.strava"); len(got) != 0 {
+	if got := h.published("cairn.results.backfill.strava.strava-fetcher"); len(got) != 0 {
 		t.Errorf("published %d results; want none", len(got))
 	}
 }
@@ -201,7 +201,7 @@ func TestReconcile_SkipsKnownAndAdvancesWatermark(t *testing.T) {
 		t.Errorf("listing query = %v; want after=%s per_page=100", queries[0], want)
 	}
 
-	results := h.published("cairn.results.reconcile.strava.acct")
+	results := h.published("cairn.results.reconcile.strava.strava-fetcher.acct")
 	if len(results) != 1 {
 		t.Fatalf("published %d reconcile results; want 1", len(results))
 	}

@@ -26,7 +26,7 @@ func webhookEvent(t *testing.T, ev stravaEvent) workersdk.WebhookEvent {
 func withLookup(t *testing.T, h *harness, reply map[string]string) *[]map[string]string {
 	t.Helper()
 	var reqs []map[string]string
-	if _, err := h.bus.RespondTo(context.Background(), "cairn.accounts.lookup_by_provider_ext", func(_ context.Context, body []byte) ([]byte, error) {
+	if _, err := h.bus.RespondTo(context.Background(), "cairn.accounts.lookup.strava.strava-fetcher", func(_ context.Context, body []byte) ([]byte, error) {
 		var r map[string]string
 		_ = json.Unmarshal(body, &r)
 		reqs = append(reqs, r)
@@ -108,7 +108,7 @@ func TestLookupAccountByOwnerID_Errors(t *testing.T) {
 	if _, _, err := lookupAccountByOwnerID(context.Background(), h.w, "strava", "1", ""); err == nil || err.Error() != "not_found" {
 		t.Errorf("error reply = %v", err)
 	}
-	_, _ = h.bus.RespondTo(context.Background(), "cairn.accounts.lookup_by_provider_ext", func(context.Context, []byte) ([]byte, error) {
+	_, _ = h.bus.RespondTo(context.Background(), "cairn.accounts.lookup.strava.strava-fetcher", func(context.Context, []byte) ([]byte, error) {
 		return []byte("{"), nil
 	})
 	if _, _, err := lookupAccountByOwnerID(context.Background(), h.w, "strava", "1", ""); err == nil {
