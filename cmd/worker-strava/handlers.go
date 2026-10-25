@@ -626,6 +626,14 @@ func mapStravaErr(ctx context.Context, w *workersdk.Worker, cfg workerConfig, jo
 		return nil
 
 	default:
+		// Other 4xx (403 app inactive / missing scope, 400) repeat on every
+		// retry: fail the item instead of NAK-looping.
+		var ue *stravaUnexpectedError
+		if errors.As(err, &ue) && ue.Status >= 400 && ue.Status < 500 {
+			reason := fmt.Sprintf("strava_%d", ue.Status)
+			publishFailureResult(ctx, w, cfg, job, in, reason, err)
+			return &port.TerminalError{Reason: reason, Cause: fmt.Errorf("strava %s: %w", op, err)}
+		}
 		var rl *StravaRateLimitError
 		if errors.As(err, &rl) {
 			return &port.NakWithDelayError{
