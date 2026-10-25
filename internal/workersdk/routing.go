@@ -20,6 +20,9 @@ func (w *Worker) JobSubject(job string) string {
 	return "cairn.jobs." + job + "." + w.cfg.Provider + "." + w.cfg.Name
 }
 
+// Name is the pool name (Config.Name).
+func (w *Worker) Name() string { return w.cfg.Name }
+
 // DiscoverSubject is the request/reply subject this pool answers discovery on.
 func (w *Worker) DiscoverSubject() string {
 	return "cairn.discover." + w.cfg.Provider + "." + w.cfg.Name

@@ -48,7 +48,7 @@ func TestWebhookEvent_CreateEnqueuesFetch(t *testing.T) {
 	if len(jobs) != 1 || jobs[0].ExtID != "42" || jobs[0].AccountID != "acct" || jobs[0].Reason != "webhook" || !jobs[0].FetchStreams {
 		t.Fatalf("jobs = %+v", jobs)
 	}
-	if r := (*reqs)[0]; r["external_id"] != "9" || r["subscription_id"] != "5" || r["provider"] != "strava" {
+	if r := (*reqs)[0]; r["external_id"] != "9" || r["subscription_id"] != "5" || r["provider"] != "strava" || r["worker_name"] != workerName {
 		t.Errorf("lookup request = %v", r)
 	}
 }

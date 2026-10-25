@@ -168,13 +168,14 @@ func handleWebhookVerify(
 //
 // Wire format on cairn.accounts.lookup_by_provider_ext:
 //
-//	request:  {"provider": "strava", "external_id": "12345", "subscription_id": "678"}
+//	request:  {"provider": "strava", "external_id": "12345", "subscription_id": "678", "worker_name": "strava-fetcher"}
 //	reply:    {"account_id": "uuid", "user_id": "uuid"} | {"error": "..."}
 //
 // subscription_id is the unambiguous key (#50) — the same athlete may be
 // linked by multiple connections. The server prefers it and falls back to
 // external_id (owner_id) when the subscription mapping isn't recorded yet.
-// An empty subscriptionID is omitted from the request.
+// worker_name picks this pool's connection when the athlete is connected once
+// per pool (core ADR 0006). An empty subscriptionID is omitted from the request.
 func lookupAccountByOwnerID(
 	ctx context.Context,
 	w *workersdk.Worker,
@@ -183,6 +184,7 @@ func lookupAccountByOwnerID(
 	reqMap := map[string]string{
 		"provider":    provider,
 		"external_id": ownerID,
+		"worker_name": w.Name(),
 	}
 	if subscriptionID != "" && subscriptionID != "0" {
 		reqMap["subscription_id"] = subscriptionID
