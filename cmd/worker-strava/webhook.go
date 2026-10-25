@@ -70,7 +70,7 @@ func handleWebhookEvent(ctx context.Context, w *workersdk.Worker, ev workersdk.W
 
 	// Map owner_id → internal account_id via request/reply against the
 	// server's lookup endpoint. This subject is generic
-	// (cairn.accounts.lookup_by_provider_ext) so any worker can use it. We
+	// (cairn.accounts.lookup.<provider>.<pool>) so any worker can use it. We
 	// also pass subscription_id: the same Strava athlete may be linked by
 	// multiple Cairn connections, so subscription_id is the unambiguous key
 	// (#50). The server prefers it and self-heals the mapping from the first
@@ -166,9 +166,9 @@ func handleWebhookVerify(
 // lookupAccountByOwnerID asks the cairn-server to resolve a Strava webhook
 // event into an internal account_id + user_id.
 //
-// Wire format on cairn.accounts.lookup_by_provider_ext:
+// Wire format on cairn.accounts.lookup.<provider>.<worker_name> (this pool's subject):
 //
-//	request:  {"provider": "strava", "external_id": "12345", "subscription_id": "678", "worker_name": "strava-fetcher"}
+//	request:  {"provider": "strava", "external_id": "12345", "subscription_id": "678"}
 //	reply:    {"account_id": "uuid", "user_id": "uuid"} | {"error": "..."}
 //
 // subscription_id is the unambiguous key (#50) — the same athlete may be

@@ -796,7 +796,7 @@ func (w *Worker) Enqueue(ctx context.Context, subject, msgID string, body []byte
 // Request performs a NATS request/reply round-trip. Used by handlers
 // that need synchronous server-side data (e.g. webhook handlers
 // looking up an account by provider+external_id via
-// cairn.accounts.lookup_by_provider_ext).
+// cairn.accounts.lookup.<provider>.<name>).
 //
 // For OAuth token fetches, handlers should use FetchToken instead —
 // it goes through the dedicated cache.
