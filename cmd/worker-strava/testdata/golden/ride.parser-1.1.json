@@ -1,0 +1,185 @@
+[
+  {
+    "gear": {
+      "payload": {
+        "distanceM": 1234567,
+        "kind": "GEAR_KIND_BIKE",
+        "name": "Gravel bike",
+        "primary": true
+      },
+      "ref": {
+        "externalAccountId": "a1",
+        "externalId": "b1234",
+        "provider": "strava",
+        "userId": "u1"
+      }
+    },
+    "type": "WORKER_EVENT_TYPE_GEAR"
+  },
+  {
+    "activity": {
+      "payload": {
+        "description": "fixture",
+        "discipline": "DISCIPLINE_RIDE_GRAVEL",
+        "elapsedDuration": "600s",
+        "endTime": "2026-07-04T13:50:00Z",
+        "gearExternalId": "b1234",
+        "gearName": "Gravel bike",
+        "isCommute": true,
+        "laps": [
+          {
+            "avgCadence": 85,
+            "avgHeartRateBpm": 138,
+            "avgPowerW": 180,
+            "avgSpeedMps": 7.7,
+            "distanceM": 2100.2,
+            "elapsedDuration": "300s",
+            "elevationGainM": 30.1,
+            "index": 1,
+            "label": "Lap 1",
+            "maxHeartRateBpm": 165,
+            "movingDuration": "270s",
+            "startTime": "2026-07-04T13:40:00Z"
+          },
+          {
+            "avgCadence": 88,
+            "avgHeartRateBpm": 144,
+            "avgPowerW": 185,
+            "avgSpeedMps": 7.8,
+            "distanceM": 2100.3,
+            "elapsedDuration": "300s",
+            "elevationGainM": 25.1,
+            "index": 2,
+            "label": "Lap 2",
+            "maxHeartRateBpm": 172,
+            "movingDuration": "270s",
+            "startTime": "2026-07-04T13:45:00Z"
+          }
+        ],
+        "movingDuration": "540s",
+        "providerNativeType": "GravelRide",
+        "startTime": "2026-07-04T13:40:00Z",
+        "summary": {
+          "avgCadence": 86,
+          "avgHeartRateBpm": 141,
+          "avgPowerW": 182,
+          "avgSpeedMps": 7.78,
+          "avgTemperatureC": 21,
+          "caloriesKcal": 310,
+          "distanceM": 4200.5,
+          "elevationGainM": 55.2,
+          "maxHeartRateBpm": 172,
+          "maxPowerW": 420,
+          "maxSpeedMps": 12.4,
+          "normalizedPowerW": 190
+        },
+        "timezone": "Europe/Berlin",
+        "title": "Synthetic ride",
+        "type": "ACTIVITY_TYPE_RIDE"
+      },
+      "rawBlobId": "blob-1",
+      "ref": {
+        "externalAccountId": "a1",
+        "externalId": "1000001",
+        "provider": "strava",
+        "userId": "u1"
+      },
+      "stream": {
+        "altitudeM": [
+          34,
+          35.5,
+          37,
+          38.2,
+          36.1,
+          35
+        ],
+        "cadence": [
+          80,
+          84,
+          86,
+          88,
+          90,
+          85
+        ],
+        "channels": [
+          "STREAM_CHANNEL_LATITUDE",
+          "STREAM_CHANNEL_LONGITUDE",
+          "STREAM_CHANNEL_ALTITUDE",
+          "STREAM_CHANNEL_DISTANCE",
+          "STREAM_CHANNEL_SPEED",
+          "STREAM_CHANNEL_HEART_RATE",
+          "STREAM_CHANNEL_POWER",
+          "STREAM_CHANNEL_CADENCE",
+          "STREAM_CHANNEL_TEMPERATURE"
+        ],
+        "distanceM": [
+          0,
+          450.1,
+          900.3,
+          1350.2,
+          1800.9,
+          2100.2
+        ],
+        "heartRateBpm": [
+          120,
+          135,
+          142,
+          150,
+          160,
+          165
+        ],
+        "latitude": [
+          52.5,
+          52.501,
+          52.502,
+          52.503,
+          52.504,
+          52.505
+        ],
+        "longitude": [
+          13.4,
+          13.401,
+          13.402,
+          13.403,
+          13.404,
+          13.405
+        ],
+        "powerW": [
+          150,
+          175,
+          190,
+          200,
+          210,
+          180
+        ],
+        "resolutionHz": 1,
+        "sampleCount": 6,
+        "speedMps": [
+          0,
+          7.5,
+          7.6,
+          7.7,
+          7.9,
+          7.4
+        ],
+        "temperatureC": [
+          21,
+          21,
+          22,
+          22,
+          21,
+          21
+        ],
+        "timeS": [
+          0,
+          60,
+          120,
+          180,
+          240,
+          300
+        ]
+      }
+    },
+    "type": "WORKER_EVENT_TYPE_ACTIVITY"
+  }
+]

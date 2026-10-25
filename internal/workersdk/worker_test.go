@@ -335,6 +335,9 @@ func TestHeartbeat_PublishesToKV(t *testing.T) {
 }
 
 func TestDeriveResultSubject(t *testing.T) {
+	if got := deriveResultSubject("cairn.jobs.fetch_source.strava.w1"); got != "cairn.results.fetch_source.strava.w1" {
+		t.Errorf("pool subject: got %q", got)
+	}
 	if got := deriveResultSubject("cairn.jobs.fetch_source.strava"); got != "cairn.results.fetch_source.strava" {
 		t.Errorf("got %q", got)
 	}

@@ -69,7 +69,7 @@ func (h *harness) published(subject string) []port.Message {
 func (h *harness) fetchJobs(t *testing.T) []fetchSourceJob {
 	t.Helper()
 	var out []fetchSourceJob
-	for _, m := range h.published(subjFetchSource) {
+	for _, m := range h.published(h.w.JobSubject(jobFetchSource)) {
 		var j fetchSourceJob
 		if err := json.Unmarshal(m.Body, &j); err != nil {
 			t.Fatal(err)
@@ -115,7 +115,7 @@ func TestBackfill_StopsOnShortPageAndPublishesResult(t *testing.T) {
 	h := newHarness(t, listingServer([][]stravaActivitySummary{summaries(1, 2), summaries(3, 1)}, &queries))
 
 	body, _ := json.Marshal(backfillJob{JobID: "b1", AccountID: "acct", UserID: "u1", PageSize: 2})
-	job := workersdk.Job{Subject: subjBackfill, Body: body}
+	job := workersdk.Job{Subject: "cairn.jobs.backfill.strava.strava-fetcher", Body: body}
 	if err := makeBackfillHandler(workerConfig{WorkerName: workerName}, h.client)(context.Background(), h.w, job); err != nil {
 		t.Fatalf("backfill: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestBackfill_StopsOnShortPageAndPublishesResult(t *testing.T) {
 	if len(queries) != 2 {
 		t.Errorf("listed %d pages; want 2 (short page ends the walk)", len(queries))
 	}
-	if got := h.published("cairn.results.backfill.strava"); len(got) != 1 {
+	if got := h.published("cairn.results.backfill.strava.strava-fetcher"); len(got) != 1 {
 		t.Fatalf("published %d backfill results; want 1", len(got))
 	}
 }
@@ -140,7 +140,7 @@ func TestBackfill_CapsAtMaxActivities(t *testing.T) {
 	h := newHarness(t, listingServer([][]stravaActivitySummary{summaries(1, 3), summaries(4, 3)}, &queries))
 
 	body, _ := json.Marshal(backfillJob{JobID: "b1", AccountID: "acct", PageSize: 3, MaxActivities: 2})
-	if err := makeBackfillHandler(workerConfig{}, h.client)(context.Background(), h.w, workersdk.Job{Subject: subjBackfill, Body: body}); err != nil {
+	if err := makeBackfillHandler(workerConfig{}, h.client)(context.Background(), h.w, workersdk.Job{Subject: "cairn.jobs.backfill.strava.strava-fetcher", Body: body}); err != nil {
 		t.Fatalf("backfill: %v", err)
 	}
 	if n := len(h.fetchJobs(t)); n != 2 {
@@ -155,10 +155,10 @@ func TestBackfill_ListingNotFoundAcksWithoutResult(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) })
 
 	body, _ := json.Marshal(backfillJob{JobID: "b1", AccountID: "acct"})
-	if err := makeBackfillHandler(workerConfig{}, h.client)(context.Background(), h.w, workersdk.Job{Subject: subjBackfill, Body: body}); err != nil {
+	if err := makeBackfillHandler(workerConfig{}, h.client)(context.Background(), h.w, workersdk.Job{Subject: "cairn.jobs.backfill.strava.strava-fetcher", Body: body}); err != nil {
 		t.Fatalf("backfill: %v; want nil (ack)", err)
 	}
-	if got := h.published("cairn.results.backfill.strava"); len(got) != 0 {
+	if got := h.published("cairn.results.backfill.strava.strava-fetcher"); len(got) != 0 {
 		t.Errorf("published %d results; want none", len(got))
 	}
 }
@@ -167,7 +167,7 @@ func TestBackfill_ListingUnauthorizedIsTerminal(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) })
 
 	body, _ := json.Marshal(backfillJob{JobID: "b1", AccountID: "acct"})
-	err := makeBackfillHandler(workerConfig{}, h.client)(context.Background(), h.w, workersdk.Job{Subject: subjBackfill, Body: body})
+	err := makeBackfillHandler(workerConfig{}, h.client)(context.Background(), h.w, workersdk.Job{Subject: "cairn.jobs.backfill.strava.strava-fetcher", Body: body})
 	var term *port.TerminalError
 	if !errors.As(err, &term) || term.Reason != "needs_reauth" {
 		t.Fatalf("err = %v; want needs_reauth terminal", err)
@@ -189,7 +189,7 @@ func TestReconcile_SkipsKnownAndAdvancesWatermark(t *testing.T) {
 
 	wm := time.Now().Add(-2 * time.Hour)
 	body, _ := json.Marshal(reconcileJob{JobID: "r1", AccountID: "acct", UserID: "u1", Watermark: &wm, KnownExtIDs: []string{"2"}})
-	if err := makeReconcileHandler(workerConfig{}, h.client)(context.Background(), h.w, workersdk.Job{Subject: subjReconcile, Body: body}); err != nil {
+	if err := makeReconcileHandler(workerConfig{}, h.client)(context.Background(), h.w, workersdk.Job{Subject: "cairn.jobs.reconcile.strava.strava-fetcher", Body: body}); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
@@ -201,7 +201,7 @@ func TestReconcile_SkipsKnownAndAdvancesWatermark(t *testing.T) {
 		t.Errorf("listing query = %v; want after=%s per_page=100", queries[0], want)
 	}
 
-	results := h.published("cairn.results.reconcile.strava.acct")
+	results := h.published("cairn.results.reconcile.strava.strava-fetcher.acct")
 	if len(results) != 1 {
 		t.Fatalf("published %d reconcile results; want 1", len(results))
 	}
@@ -226,7 +226,7 @@ func TestReconcile_StopsAtMaxEnqueue(t *testing.T) {
 	h := newHarness(t, listingServer([][]stravaActivitySummary{full, summaries(101, 100)}, &queries))
 
 	body, _ := json.Marshal(reconcileJob{JobID: "r1", AccountID: "acct", MaxEnqueue: 50})
-	if err := makeReconcileHandler(workerConfig{}, h.client)(context.Background(), h.w, workersdk.Job{Subject: subjReconcile, Body: body}); err != nil {
+	if err := makeReconcileHandler(workerConfig{}, h.client)(context.Background(), h.w, workersdk.Job{Subject: "cairn.jobs.reconcile.strava.strava-fetcher", Body: body}); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	// The cap is checked per page, so the whole first page is enqueued.

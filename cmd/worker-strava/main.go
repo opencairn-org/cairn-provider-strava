@@ -28,6 +28,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -59,20 +60,59 @@ const (
 	workerProvider = "strava"
 	jobStream      = "CAIRN_JOBS"
 
-	// workerVersion + workerPackage are compile-time identity: together with the
-	// capability manifest they define this worker's schema/contract. They are
-	// baked into the binary (NOT env-overridable) — bump them in source when the
-	// worker's output shape or version changes, then rebuild.
-	workerVersion = "1"
-	workerPackage = "cairns.internal.strava-importer"
+	// Versions (cairn-core ADR 0005), baked into the binary, not
+	// env-overridable. datasetVersion is the archive format the importer
+	// writes; bump it only when the parser can no longer read the previous
+	// one. workerVersion is the parser version datasetVersion.M: bump M with
+	// EVERY change to the parsed output (TestParserGolden enforces it).
+	datasetVersion = 1
+	workerVersion  = "1.1" // 1.1: gear id per activity
+	workerPackage  = "cairns.internal.strava-importer"
 
-	subjFetchSource = "cairn.jobs.fetch_source.strava"
-	subjParseBlob   = "cairn.jobs.parse_blob.strava"
-	subjBackfill    = "cairn.jobs.backfill.strava"
-	subjReconcile   = "cairn.jobs.reconcile.strava"
-	subjImportGear  = "cairn.jobs.import_gear.strava"
-	subjDiscover    = "cairn.discover.strava"
+	// Job kinds; the subjects are per pool (w.JobSubject, ADR 0006).
+	jobFetchSource = "fetch_source"
+	jobParseBlob   = "parse_blob"
+	jobBackfill    = "backfill"
+	jobReconcile   = "reconcile"
+	jobImportGear  = "import_gear"
 )
+
+// Rate-limit buckets are per Strava app: strava:<app>:<window>, where app is
+// the core-issued id of the connection's app (core reads
+// <provider>.<app>.<window>). A token without an app id (older core) falls
+// back to the pool's bucket strava:<pool>:<window>.
+var rateBucketPool = workerName
+
+func rateBucket(app, window string) string {
+	if app == "" {
+		app = rateBucketPool
+	}
+	return workerProvider + ":" + app + ":" + window
+}
+
+// tokenApps remembers which app each access token belongs to, so the API
+// client can attribute usage headers and 429s to the right bucket.
+var tokenApps sync.Map
+
+// fetchToken is w.FetchToken plus the token→app bookkeeping.
+func fetchToken(ctx context.Context, w *workersdk.Worker, accountID string) (workersdk.Token, error) {
+	tok, err := w.FetchToken(ctx, accountID)
+	if err == nil && tok.AccessToken != "" {
+		tokenApps.Store(tok.AccessToken, tok.AppID)
+	}
+	return tok, err
+}
+
+func appFor(accessToken string) string {
+	if v, ok := tokenApps.Load(accessToken); ok {
+		return v.(string)
+	}
+	return ""
+}
+
+// workerRelease is the release tag, stamped at build time
+// (-ldflags "-X main.workerRelease=v0.5.0"); core requires the same major.minor.
+var workerRelease = ""
 
 func main() {
 	cfg, err := loadConfig()
@@ -89,6 +129,7 @@ func main() {
 }
 
 func run(cfg workerConfig, logger *slog.Logger) error {
+	rateBucketPool = cfg.WorkerName
 	bus, err := connectBus(cfg, logger)
 	if err != nil {
 		return fmt.Errorf("connect bus: %w", err)
@@ -101,6 +142,7 @@ func run(cfg workerConfig, logger *slog.Logger) error {
 		Name:       cfg.WorkerName,
 		InstanceID: cfg.InstanceID,
 		Version:    workerVersion,
+		Release:    workerRelease,
 		Package:    workerPackage,
 		Provider:   workerProvider,
 		Bus:        bus,
@@ -121,7 +163,7 @@ func run(cfg workerConfig, logger *slog.Logger) error {
 	defer cancel()
 
 	// Discovery responder (request/reply): the Core asks what's importable.
-	discSub, err := bus.RespondTo(ctx, subjDiscover, makeDiscoverHandler(w, client))
+	discSub, err := bus.RespondTo(ctx, w.DiscoverSubject(), makeDiscoverHandler(w, client))
 	if err != nil {
 		return fmt.Errorf("register discover responder: %w", err)
 	}
@@ -130,7 +172,8 @@ func run(cfg workerConfig, logger *slog.Logger) error {
 	logger.Info("strava worker starting",
 		"instance", cfg.InstanceID,
 		"version", workerVersion,
-		"handlers", []string{subjFetchSource, subjParseBlob, subjBackfill, subjReconcile, subjImportGear},
+		"release", workerRelease,
+		"pool", w.JobSubject("*"),
 	)
 
 	return w.Run(ctx)
@@ -142,17 +185,30 @@ func registerHandlers(w *workersdk.Worker, cfg workerConfig, client *stravaClien
 	// Sync the shared limiter to the budget Strava reports on every response —
 	// authoritative capacities instead of the configured guesses, anchored to
 	// Strava's real reset boundaries (quarter-hour / midnight UTC).
-	client.onUsage = func(usedShort, limitShort, usedDaily, limitDaily int) {
+	client.appOf = appFor
+	client.onUsage = func(app string, usedShort, limitShort, usedDaily, limitDaily int) {
 		bg := context.Background()
 		now := time.Now().UTC()
-		_ = w.ObserveUsage(bg, "strava:short", usedShort, limitShort, nextQuarterHour(now))
-		_ = w.ObserveUsage(bg, "strava:daily", usedDaily, limitDaily, nextMidnightUTC(now))
+		_ = w.ObserveUsage(bg, rateBucket(app, "short"), usedShort, limitShort, nextQuarterHour(now))
+		_ = w.ObserveUsage(bg, rateBucket(app, "daily"), usedDaily, limitDaily, nextMidnightUTC(now))
 	}
-	w.Handle(subjFetchSource, makeFetchSourceHandler(cfg, client))
-	w.Handle(subjParseBlob, makeParseBlobHandler(cfg))
-	w.Handle(subjBackfill, makeBackfillHandler(cfg, client))
-	w.Handle(subjReconcile, makeReconcileHandler(cfg, client))
-	w.Handle(subjImportGear, makeImportGearHandler(cfg, client))
+	handlers := map[string]workersdk.HandlerFunc{
+		jobFetchSource: makeFetchSourceHandler(cfg, client),
+		jobParseBlob:   makeParseBlobHandler(cfg),
+		jobBackfill:    makeBackfillHandler(cfg, client),
+		jobReconcile:   makeReconcileHandler(cfg, client),
+		jobImportGear:  makeImportGearHandler(cfg, client),
+	}
+	for job, fn := range handlers {
+		if job == jobParseBlob {
+			// parser_too_old hands the job back parserTooOldAttempts times.
+			w.HandleWithMaxDeliver(w.JobSubject(job), fn, parserTooOldAttempts+2)
+		} else {
+			w.Handle(w.JobSubject(job), fn)
+		}
+		// Pre-0.5 subject, drained once after the upgrade. Remove in 0.6.
+		w.HandleLegacy("cairn.jobs."+job+"."+workerProvider, fn)
+	}
 
 	// Webhook handlers — registered ONLY if CAIRN_STRAVA_WEBHOOK_VERIFY_TOKEN
 	// is set. Without it, this worker instance doesn't claim Strava's

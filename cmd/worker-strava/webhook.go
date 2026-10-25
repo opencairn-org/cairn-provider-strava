@@ -70,7 +70,7 @@ func handleWebhookEvent(ctx context.Context, w *workersdk.Worker, ev workersdk.W
 
 	// Map owner_id → internal account_id via request/reply against the
 	// server's lookup endpoint. This subject is generic
-	// (cairn.accounts.lookup_by_provider_ext) so any worker can use it. We
+	// (cairn.accounts.lookup.<provider>.<pool>) so any worker can use it. We
 	// also pass subscription_id: the same Strava athlete may be linked by
 	// multiple Cairn connections, so subscription_id is the unambiguous key
 	// (#50). The server prefers it and self-heals the mapping from the first
@@ -97,7 +97,7 @@ func handleWebhookEvent(ctx context.Context, w *workersdk.Worker, ev workersdk.W
 			"aspect_type":   sev.AspectType,
 		})
 		msgID := fmt.Sprintf("fetch:strava:%d:%d", sev.OwnerID, sev.ObjectID)
-		return w.Enqueue(ctx, "cairn.jobs.fetch_source.strava", msgID, body)
+		return w.Enqueue(ctx, w.JobSubject(jobFetchSource), msgID, body)
 
 	case "delete":
 		body, _ := json.Marshal(map[string]any{
@@ -166,7 +166,7 @@ func handleWebhookVerify(
 // lookupAccountByOwnerID asks the cairn-server to resolve a Strava webhook
 // event into an internal account_id + user_id.
 //
-// Wire format on cairn.accounts.lookup_by_provider_ext:
+// Wire format on cairn.accounts.lookup.<provider>.<worker_name> (this pool's subject):
 //
 //	request:  {"provider": "strava", "external_id": "12345", "subscription_id": "678"}
 //	reply:    {"account_id": "uuid", "user_id": "uuid"} | {"error": "..."}
@@ -174,7 +174,8 @@ func handleWebhookVerify(
 // subscription_id is the unambiguous key (#50) — the same athlete may be
 // linked by multiple connections. The server prefers it and falls back to
 // external_id (owner_id) when the subscription mapping isn't recorded yet.
-// An empty subscriptionID is omitted from the request.
+// worker_name picks this pool's connection when the athlete is connected once
+// per pool (core ADR 0006). An empty subscriptionID is omitted from the request.
 func lookupAccountByOwnerID(
 	ctx context.Context,
 	w *workersdk.Worker,
@@ -183,6 +184,7 @@ func lookupAccountByOwnerID(
 	reqMap := map[string]string{
 		"provider":    provider,
 		"external_id": ownerID,
+		"worker_name": w.Name(),
 	}
 	if subscriptionID != "" && subscriptionID != "0" {
 		reqMap["subscription_id"] = subscriptionID
@@ -191,7 +193,7 @@ func lookupAccountByOwnerID(
 	if err != nil {
 		return "", "", err
 	}
-	resp, err := w.Request(ctx, "cairn.accounts.lookup_by_provider_ext", req, 1*time.Second)
+	resp, err := w.Request(ctx, w.LookupSubject(), req, 1*time.Second)
 	if err != nil {
 		return "", "", err
 	}

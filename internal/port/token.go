@@ -17,4 +17,7 @@ type TokenState struct {
 	ExpiresAt    time.Time
 	Scope        string
 	TokenType    string // typically "Bearer"
+	// AppID names the provider app the token belongs to (core-issued hash of
+	// the client id); rate-limit budgets are per app.
+	AppID string
 }

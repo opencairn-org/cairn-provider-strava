@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -154,9 +155,11 @@ func newRateLimiter(bus port.JobBus, logger *slog.Logger) port.RateLimiter {
 		// Fallback guesses only: Strava's default READ limits for
 		// non-approved apps. The authoritative values come from the
 		// X-ReadRateLimit-* headers via SyncUsage on every API response.
-		"strava:short":   100,
-		"strava:daily":   1000,
-		"strava:webhook": 20,
+		// Keyed per pool: per-app buckets are learned from the first usage
+		// headers of each app.
+		rateBucket("", "short"):   100,
+		rateBucket("", "daily"):   1000,
+		rateBucket("", "webhook"): 20,
 	})
 }
 
@@ -222,7 +225,7 @@ func makeDiscoverHandler(w *workersdk.Worker, client *stravaClient) port.Request
 		if err := json.Unmarshal(body, &req); err != nil {
 			return json.Marshal(discoverResponse{Error: "bad_request"})
 		}
-		token, err := w.FetchToken(ctx, req.AccountID)
+		token, err := fetchToken(ctx, w, req.AccountID)
 		if err != nil {
 			return json.Marshal(discoverResponse{Error: err.Error()})
 		}
@@ -236,7 +239,7 @@ func discoverPages(ctx context.Context, w *workersdk.Worker, client *stravaClien
 	var items []discoverItem
 	for i := 0; ; i++ {
 		page := start + i
-		if err := reserveRead(ctx, w, "strava:short"); err != nil {
+		if err := reserveRead(ctx, w, rateBucket(appFor(accessToken), "short")); err != nil {
 			return discoverReserveFailed(items, page, err)
 		}
 		sums, err := client.ListAthleteActivities(ctx, accessToken, 0, page, perPage)
@@ -305,10 +308,16 @@ type fetchSourceJob struct {
 // daily bucket's reset is anchored to midnight UTC by the usage-header sync,
 // so exhaustion yields a NakWithDelay that sleeps until the budget is real.
 func reserveRead(ctx context.Context, w *workersdk.Worker, bucket string) error {
-	if err := w.ReserveAPI(ctx, "strava:daily", 1); err != nil {
+	if err := w.ReserveAPI(ctx, siblingBucket(bucket, "daily"), 1); err != nil {
 		return err
 	}
 	return w.ReserveAPI(ctx, bucket, 1)
+}
+
+// siblingBucket is the same app's bucket for another window
+// (strava:<app>:short → strava:<app>:daily).
+func siblingBucket(bucket, window string) string {
+	return bucket[:strings.LastIndex(bucket, ":")+1] + window
 }
 
 // segmentCache memoises fetched segment geometry (SegmentImport) by Strava
@@ -362,15 +371,16 @@ func makeFetchSourceHandler(cfg workerConfig, client *stravaClient) func(context
 // fetchSourceOnce is one fetch_source attempt: pull the activity (+streams,
 // segments), archive the raw JSON, and publish the claim-checked result.
 func fetchSourceOnce(ctx context.Context, w *workersdk.Worker, cfg workerConfig, client *stravaClient, segCache *segmentCache, job workersdk.Job, in fetchSourceJob) error {
-	token, err := w.FetchToken(ctx, in.AccountID)
+	token, err := fetchToken(ctx, w, in.AccountID)
 	if err != nil {
 		return err // already a TerminalError or NakWithDelay
 	}
 
-	bucket := "strava:short"
+	window := "short"
 	if in.Reason == "webhook" {
-		bucket = "strava:webhook"
+		window = "webhook"
 	}
+	bucket := rateBucket(token.AppID, window)
 	if err := reserveRead(ctx, w, bucket); err != nil {
 		return err
 	}
@@ -487,6 +497,7 @@ func newJobResult(cfg workerConfig, events ...*workerv1.WorkerEvent) *workerv1.J
 		WorkerName:    cfg.WorkerName,
 		WorkerVersion: workerVersion,
 		WorkerPackage: workerPackage,
+		WorkerRelease: workerRelease,
 		Events:        events,
 	}
 }
@@ -626,6 +637,14 @@ func mapStravaErr(ctx context.Context, w *workersdk.Worker, cfg workerConfig, jo
 		return nil
 
 	default:
+		// Other 4xx (403 app inactive / missing scope, 400) repeat on every
+		// retry: fail the item instead of NAK-looping.
+		var ue *stravaUnexpectedError
+		if errors.As(err, &ue) && ue.Status >= 400 && ue.Status < 500 {
+			reason := fmt.Sprintf("strava_%d", ue.Status)
+			publishFailureResult(ctx, w, cfg, job, in, reason, err)
+			return &port.TerminalError{Reason: reason, Cause: fmt.Errorf("strava %s: %w", op, err)}
+		}
 		var rl *StravaRateLimitError
 		if errors.As(err, &rl) {
 			return &port.NakWithDelayError{
@@ -644,7 +663,8 @@ func mapStravaErr(ctx context.Context, w *workersdk.Worker, cfg workerConfig, jo
 // present, wins) and returns how long to wait before retrying.
 func observe429(ctx context.Context, w *workersdk.Worker, rl *StravaRateLimitError) time.Duration {
 	now := time.Now().UTC()
-	windowReset, bucket := rateLimitReset(rl.Headers, now)
+	windowReset, window := rateLimitReset(rl.Headers, now)
+	bucket := rateBucket(rl.App, window)
 	if rl.RetryAfter > 0 {
 		windowReset = now.Add(rl.RetryAfter)
 	}
@@ -667,7 +687,10 @@ type parseBlobJob struct {
 	Provider  string `json:"provider"`
 	AccountID string `json:"account_id"` // external_account_id for the rebuilt ref
 	ExtID     string `json:"ext_id"`     // provider activity id for the rebuilt ref
-	Blob      struct {
+	// MinParserVersion is the source's current parser version; an older
+	// parser must not re-parse it (ADR 0005).
+	MinParserVersion string `json:"min_parser_version"`
+	Blob             struct {
 		URL            string    `json:"url"`
 		ExpiresAt      time.Time `json:"expires_at"`
 		FallbackHandle string    `json:"fallback_handle"` // raw_blob_id (full S3 key) for re-presign
@@ -688,6 +711,17 @@ func makeParseBlobHandler(cfg workerConfig) func(context.Context, *workersdk.Wor
 		if err := json.Unmarshal(job.Body, &in); err != nil {
 			return &port.TerminalError{Reason: "bad_payload", Cause: err}
 		}
+		// Rolling upgrade: leave it to a newer instance of the pool, backing
+		// off; after parserTooOldAttempts core is told and keeps the source
+		// flagged for a later re-parse.
+		if !workersdk.ParserAllows(workerVersion, in.MinParserVersion) {
+			cause := fmt.Errorf("source parsed by %s, this parser is %s", in.MinParserVersion, workerVersion)
+			if job.DeliveryAttempt >= parserTooOldAttempts {
+				publishFailureResult(ctx, w, cfg, job, fetchSourceJob{UserID: in.UserID, AccountID: in.AccountID, ExtID: in.ExtID}, "parser_too_old", cause)
+				return &port.TerminalError{Reason: "parser_too_old", Cause: cause}
+			}
+			return &port.NakWithDelayError{Reason: "parser_too_old", Delay: parserTooOldBackoff(job.DeliveryAttempt), Cause: cause}
+		}
 
 		url, err := blobDownloadURL(ctx, w, in)
 		if err != nil {
@@ -698,27 +732,41 @@ func makeParseBlobHandler(cfg workerConfig) func(context.Context, *workersdk.Wor
 		if err != nil {
 			return fmt.Errorf("download archive: %w", err) // transient → NAK
 		}
-
-		payload := mapActivityToPayload(arch.Activity)
-		protoStream := mapStreamsToProto(arch.Streams)
-
-		extID := in.ExtID
-		if extID == "" {
-			extID = formatActivityID(arch.Activity.ID)
+		if arch.Version != datasetVersion {
+			return &port.TerminalError{Reason: "dataset_mismatch", Cause: fmt.Errorf("archive dataset %d, parser reads %d", arch.Version, datasetVersion)}
 		}
 
-		// Archived JSON carries the gear summary, so a reparse backfills gear
-		// on old imports without spending API budget.
 		ref := fetchSourceJob{UserID: in.UserID, AccountID: in.AccountID}
-		events := activityEvents(ref, arch.Activity, &workerv1.ImportedActivity{
-			Ref:       externalRef(ref, extID),
-			Payload:   payload,
-			Stream:    protoStream,
-			RawBlobId: in.Blob.FallbackHandle, // keep the archive reference stable
-		})
-
+		events := parseArchive(ref, in.ExtID, in.Blob.FallbackHandle, arch)
 		return publishResultViaBlob(ctx, w, job, "result:"+in.JobID, newJobResult(cfg, events...))
 	}
+}
+
+// parseArchive is the parser proper: archived bytes in, events out. Its
+// output is pinned per parser version by TestParserGolden.
+func parseArchive(ref fetchSourceJob, extID, blobID string, arch archivedActivity) []*workerv1.WorkerEvent {
+	if extID == "" {
+		extID = formatActivityID(arch.Activity.ID)
+	}
+	// Archived JSON carries the gear summary, so a reparse backfills gear
+	// on old imports without spending API budget.
+	return activityEvents(ref, arch.Activity, &workerv1.ImportedActivity{
+		Ref:       externalRef(ref, extID),
+		Payload:   mapActivityToPayload(arch.Activity),
+		Stream:    mapStreamsToProto(arch.Streams),
+		RawBlobId: blobID, // keep the archive reference stable
+	})
+}
+
+// parserTooOldAttempts bounds how long an old instance keeps handing a
+// re-parse back (about 35 minutes with parserTooOldBackoff).
+const parserTooOldAttempts = 10
+
+func parserTooOldBackoff(attempt int) time.Duration {
+	if attempt > 6 { // 30s·2^5 already exceeds the cap; avoid shifting past it
+		return 10 * time.Minute
+	}
+	return min(30*time.Second<<max(attempt-1, 0), 10*time.Minute)
 }
 
 // blobDownloadURL resolves a usable download URL: it re-presigns from the
@@ -766,7 +814,7 @@ func runBackfill(ctx context.Context, w *workersdk.Worker, cfg workerConfig, cli
 		return &port.TerminalError{Reason: "bad_payload", Cause: err}
 	}
 
-	token, err := w.FetchToken(ctx, in.AccountID)
+	token, err := fetchToken(ctx, w, in.AccountID)
 	if err != nil {
 		return err
 	}
@@ -825,7 +873,7 @@ func (e *activityListError) Unwrap() error { return e.err }
 // back as *activityListError; reserve and visit errors pass through.
 func listActivityPages(ctx context.Context, w *workersdk.Worker, client *stravaClient, accessToken string, after int64, perPage int, visit func([]stravaActivitySummary) (more bool, err error)) error {
 	for page := 1; ; page++ {
-		if err := reserveRead(ctx, w, "strava:short"); err != nil {
+		if err := reserveRead(ctx, w, rateBucket(appFor(accessToken), "short")); err != nil {
 			return err
 		}
 		summaries, err := client.ListAthleteActivities(ctx, accessToken, after, page, perPage)
@@ -865,7 +913,7 @@ func enqueueFetchSource(ctx context.Context, w *workersdk.Worker, jobID, account
 		Reason:       reason,
 	})
 	msgID := reason + ":" + workerProvider + ":" + accountID + ":" + extID
-	return w.Enqueue(ctx, subjFetchSource, msgID, body)
+	return w.Enqueue(ctx, w.JobSubject(jobFetchSource), msgID, body)
 }
 
 // ---------------------------------------------------------------------------
@@ -904,7 +952,7 @@ func runReconcile(ctx context.Context, w *workersdk.Worker, cfg workerConfig, cl
 		return &port.TerminalError{Reason: "bad_payload", Cause: err}
 	}
 
-	token, err := w.FetchToken(ctx, in.AccountID)
+	token, err := fetchToken(ctx, w, in.AccountID)
 	if err != nil {
 		return err
 	}
@@ -929,7 +977,7 @@ func runReconcile(ctx context.Context, w *workersdk.Worker, cfg workerConfig, cl
 	if err != nil {
 		return &port.TerminalError{Reason: "marshal_result", Cause: err}
 	}
-	subject := "cairn.results.reconcile." + workerProvider + "." + in.AccountID
+	subject := w.ResultSubject(jobReconcile) + "." + in.AccountID
 	return w.Enqueue(ctx, subject, "result:"+in.JobID, body)
 }
 

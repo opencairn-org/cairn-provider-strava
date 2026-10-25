@@ -26,7 +26,7 @@ func webhookEvent(t *testing.T, ev stravaEvent) workersdk.WebhookEvent {
 func withLookup(t *testing.T, h *harness, reply map[string]string) *[]map[string]string {
 	t.Helper()
 	var reqs []map[string]string
-	if _, err := h.bus.RespondTo(context.Background(), "cairn.accounts.lookup_by_provider_ext", func(_ context.Context, body []byte) ([]byte, error) {
+	if _, err := h.bus.RespondTo(context.Background(), "cairn.accounts.lookup.strava.strava-fetcher", func(_ context.Context, body []byte) ([]byte, error) {
 		var r map[string]string
 		_ = json.Unmarshal(body, &r)
 		reqs = append(reqs, r)
@@ -48,7 +48,7 @@ func TestWebhookEvent_CreateEnqueuesFetch(t *testing.T) {
 	if len(jobs) != 1 || jobs[0].ExtID != "42" || jobs[0].AccountID != "acct" || jobs[0].Reason != "webhook" || !jobs[0].FetchStreams {
 		t.Fatalf("jobs = %+v", jobs)
 	}
-	if r := (*reqs)[0]; r["external_id"] != "9" || r["subscription_id"] != "5" || r["provider"] != "strava" {
+	if r := (*reqs)[0]; r["external_id"] != "9" || r["subscription_id"] != "5" || r["provider"] != "strava" || r["worker_name"] != workerName {
 		t.Errorf("lookup request = %v", r)
 	}
 }
@@ -108,7 +108,7 @@ func TestLookupAccountByOwnerID_Errors(t *testing.T) {
 	if _, _, err := lookupAccountByOwnerID(context.Background(), h.w, "strava", "1", ""); err == nil || err.Error() != "not_found" {
 		t.Errorf("error reply = %v", err)
 	}
-	_, _ = h.bus.RespondTo(context.Background(), "cairn.accounts.lookup_by_provider_ext", func(context.Context, []byte) ([]byte, error) {
+	_, _ = h.bus.RespondTo(context.Background(), "cairn.accounts.lookup.strava.strava-fetcher", func(context.Context, []byte) ([]byte, error) {
 		return []byte("{"), nil
 	})
 	if _, _, err := lookupAccountByOwnerID(context.Background(), h.w, "strava", "1", ""); err == nil {

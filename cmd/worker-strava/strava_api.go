@@ -50,7 +50,9 @@ type stravaClient struct {
 	// (usedShort, limitShort, usedDaily, limitDaily). Wired to the worker's
 	// rate limiter so local accounting tracks the provider's real budget
 	// instead of a configured guess.
-	onUsage func(usedShort, limitShort, usedDaily, limitDaily int)
+	onUsage func(app string, usedShort, limitShort, usedDaily, limitDaily int)
+	// appOf resolves the app an access token belongs to (bucket scope).
+	appOf func(accessToken string) string
 }
 
 func newStravaClient() *stravaClient {
@@ -84,6 +86,7 @@ var (
 // (falls back to the X-RateLimit-Usage/Limit pair if Retry-After is
 // missing).
 type StravaRateLimitError struct {
+	App        string // the app whose budget tripped
 	RetryAfter time.Duration
 	// Headers preserved so the handler can call ObserveRateLimit429
 	// to record the bucket's authoritative state in NATS-KV.
@@ -443,7 +446,11 @@ func (c *stravaClient) get(ctx context.Context, accessToken, path string) (*http
 	if err != nil {
 		return nil, fmt.Errorf("http: %w", err)
 	}
-	c.reportUsage(resp.Header)
+	app := ""
+	if c.appOf != nil {
+		app = c.appOf(accessToken)
+	}
+	c.reportUsage(resp.Header, app)
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return resp, nil
 	}
@@ -459,7 +466,12 @@ func (c *stravaClient) get(ctx context.Context, accessToken, path string) (*http
 	case http.StatusNotFound:
 		return nil, ErrStravaNotFound
 	case http.StatusTooManyRequests:
-		return nil, classifyRateLimit(resp.Header)
+		rl := classifyRateLimit(resp.Header)
+		var rle *StravaRateLimitError
+		if errors.As(rl, &rle) {
+			rle.App = app
+		}
+		return nil, rl
 	}
 	if resp.StatusCode >= 500 {
 		return nil, &StravaServerError{Status: resp.StatusCode, Body: string(bodyBytes)}
@@ -471,7 +483,7 @@ func (c *stravaClient) get(ctx context.Context, accessToken, path string) (*http
 // Every worker call is a read, so the read budget (X-ReadRateLimit-*)
 // governs; fall back to the overall budget when the read headers are absent.
 // Header format: "short,daily" (e.g. Usage "87,613" against Limit "100,1000").
-func (c *stravaClient) reportUsage(h http.Header) {
+func (c *stravaClient) reportUsage(h http.Header, app string) {
 	if c.onUsage == nil {
 		return
 	}
@@ -484,7 +496,7 @@ func (c *stravaClient) reportUsage(h http.Header) {
 	if !ok || !ok2 {
 		return
 	}
-	c.onUsage(usage[0], limits[0], usage[1], limits[1])
+	c.onUsage(app, usage[0], limits[0], usage[1], limits[1])
 }
 
 // parseUsagePair parses Strava's "short,daily" header value.
@@ -531,9 +543,9 @@ func rateLimitReset(headers map[string]string, now time.Time) (time.Time, string
 		usage, ok2 = parseUsagePair(headers["X-RateLimit-Usage"])
 	}
 	if ok && ok2 && limits[1] > 0 && usage[1] >= limits[1] {
-		return nextMidnightUTC(now), "strava:daily"
+		return nextMidnightUTC(now), "daily"
 	}
-	return nextQuarterHour(now), "strava:short"
+	return nextQuarterHour(now), "short"
 }
 
 // classifyRateLimit reads the Retry-After header (RFC 7231 §7.1.3 — either
