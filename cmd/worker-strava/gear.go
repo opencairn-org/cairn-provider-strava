@@ -38,7 +38,7 @@ func makeImportGearHandler(cfg workerConfig, client *stravaClient) func(context.
 		if in.AccountID == "" {
 			return &port.TerminalError{Reason: "missing_account_id"}
 		}
-		token, err := w.FetchToken(ctx, in.AccountID)
+		token, err := fetchToken(ctx, w, in.AccountID)
 		if err != nil {
 			return err
 		}
@@ -60,7 +60,7 @@ func makeImportGearHandler(cfg workerConfig, client *stravaClient) func(context.
 // collectGear lists the athlete's bikes and shoes and emits one GEAR event
 // per item, detail included.
 func collectGear(ctx context.Context, w *workersdk.Worker, client *stravaClient, accessToken string, ref fetchSourceJob) ([]*workerv1.WorkerEvent, error) {
-	if err := reserveRead(ctx, w, rateBucket("short")); err != nil {
+	if err := reserveRead(ctx, w, rateBucket(appFor(accessToken), "short")); err != nil {
 		return nil, err
 	}
 	athlete, err := client.GetAthleteGear(ctx, accessToken)
@@ -83,7 +83,7 @@ func collectGear(ctx context.Context, w *workersdk.Worker, client *stravaClient,
 // gearDetail fetches brand/model/description for one gear; a 404 (gear gone
 // between the list and the detail call) falls back to the summary.
 func gearDetail(ctx context.Context, w *workersdk.Worker, client *stravaClient, accessToken string, g *stravaGearSummary) (*workerv1.GearImport, error) {
-	if err := reserveRead(ctx, w, rateBucket("short")); err != nil {
+	if err := reserveRead(ctx, w, rateBucket(appFor(accessToken), "short")); err != nil {
 		return nil, err
 	}
 	detail, err := client.GetGear(ctx, accessToken, g.ID)

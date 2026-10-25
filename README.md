@@ -79,8 +79,10 @@ Jobs are routed per pool (core ADR 0006): this worker consumes
 `cairn.results.<job>.strava.<CAIRN_WORKER_NAME>`. Instances sharing a name
 share the work; a second name is a separate pool that core assigns accounts
 to. The name is permanent: core binds it to this package, so a different
-implementation needs a new name. Rate-limit budgets are per pool
-(`strava:<name>:short|daily|webhook` in the shared KV), i.e. per Strava app.
+implementation needs a new name. Rate-limit budgets are per Strava app: core
+names the connection's app in the token reply (`app_id`), and the buckets are
+`strava:<app>:short|daily|webhook` in the shared KV (a token without an app
+id uses the pool's bucket `strava:<name>:…`).
 
 ## Develop
 

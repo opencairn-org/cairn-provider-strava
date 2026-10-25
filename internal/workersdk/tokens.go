@@ -73,6 +73,7 @@ type Token struct {
 	AccessToken string
 	ExpiresAt   time.Time
 	Scope       string
+	AppID       string // the provider app the token belongs to (rate-limit scope)
 }
 
 // tokenCache caches the FULL TokenState per account in-process and
@@ -201,6 +202,7 @@ func tokenFromState(s port.TokenState) Token {
 		AccessToken: s.AccessToken,
 		ExpiresAt:   s.ExpiresAt,
 		Scope:       s.Scope,
+		AppID:       s.AppID,
 	}
 }
 
@@ -228,6 +230,7 @@ func (c *tokenCache) serverGet(ctx context.Context, accountID string) (port.Toke
 		ExpiresAt:    reply.ExpiresAt,
 		Scope:        reply.Scope,
 		TokenType:    reply.TokenType,
+		AppID:        reply.AppID,
 	}
 	creds := OAuthClientCreds{
 		ClientID:     reply.ClientID,
@@ -324,6 +327,7 @@ type tokenGetReply struct {
 	ClientSecret string    `json:"client_secret,omitempty"`
 	Error        string    `json:"error,omitempty"`
 	RetryAfter   int       `json:"retry_after,omitempty"`
+	AppID        string    `json:"app_id,omitempty"`
 }
 
 type tokenStoreRequest struct {

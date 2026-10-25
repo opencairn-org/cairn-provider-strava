@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -154,9 +155,11 @@ func newRateLimiter(bus port.JobBus, logger *slog.Logger) port.RateLimiter {
 		// Fallback guesses only: Strava's default READ limits for
 		// non-approved apps. The authoritative values come from the
 		// X-ReadRateLimit-* headers via SyncUsage on every API response.
-		rateBucket("short"):   100,
-		rateBucket("daily"):   1000,
-		rateBucket("webhook"): 20,
+		// Keyed per pool: per-app buckets are learned from the first usage
+		// headers of each app.
+		rateBucket("", "short"):   100,
+		rateBucket("", "daily"):   1000,
+		rateBucket("", "webhook"): 20,
 	})
 }
 
@@ -222,7 +225,7 @@ func makeDiscoverHandler(w *workersdk.Worker, client *stravaClient) port.Request
 		if err := json.Unmarshal(body, &req); err != nil {
 			return json.Marshal(discoverResponse{Error: "bad_request"})
 		}
-		token, err := w.FetchToken(ctx, req.AccountID)
+		token, err := fetchToken(ctx, w, req.AccountID)
 		if err != nil {
 			return json.Marshal(discoverResponse{Error: err.Error()})
 		}
@@ -236,7 +239,7 @@ func discoverPages(ctx context.Context, w *workersdk.Worker, client *stravaClien
 	var items []discoverItem
 	for i := 0; ; i++ {
 		page := start + i
-		if err := reserveRead(ctx, w, rateBucket("short")); err != nil {
+		if err := reserveRead(ctx, w, rateBucket(appFor(accessToken), "short")); err != nil {
 			return discoverReserveFailed(items, page, err)
 		}
 		sums, err := client.ListAthleteActivities(ctx, accessToken, 0, page, perPage)
@@ -305,10 +308,16 @@ type fetchSourceJob struct {
 // daily bucket's reset is anchored to midnight UTC by the usage-header sync,
 // so exhaustion yields a NakWithDelay that sleeps until the budget is real.
 func reserveRead(ctx context.Context, w *workersdk.Worker, bucket string) error {
-	if err := w.ReserveAPI(ctx, rateBucket("daily"), 1); err != nil {
+	if err := w.ReserveAPI(ctx, siblingBucket(bucket, "daily"), 1); err != nil {
 		return err
 	}
 	return w.ReserveAPI(ctx, bucket, 1)
+}
+
+// siblingBucket is the same app's bucket for another window
+// (strava:<app>:short → strava:<app>:daily).
+func siblingBucket(bucket, window string) string {
+	return bucket[:strings.LastIndex(bucket, ":")+1] + window
 }
 
 // segmentCache memoises fetched segment geometry (SegmentImport) by Strava
@@ -362,15 +371,16 @@ func makeFetchSourceHandler(cfg workerConfig, client *stravaClient) func(context
 // fetchSourceOnce is one fetch_source attempt: pull the activity (+streams,
 // segments), archive the raw JSON, and publish the claim-checked result.
 func fetchSourceOnce(ctx context.Context, w *workersdk.Worker, cfg workerConfig, client *stravaClient, segCache *segmentCache, job workersdk.Job, in fetchSourceJob) error {
-	token, err := w.FetchToken(ctx, in.AccountID)
+	token, err := fetchToken(ctx, w, in.AccountID)
 	if err != nil {
 		return err // already a TerminalError or NakWithDelay
 	}
 
-	bucket := rateBucket("short")
+	window := "short"
 	if in.Reason == "webhook" {
-		bucket = rateBucket("webhook")
+		window = "webhook"
 	}
+	bucket := rateBucket(token.AppID, window)
 	if err := reserveRead(ctx, w, bucket); err != nil {
 		return err
 	}
@@ -653,7 +663,8 @@ func mapStravaErr(ctx context.Context, w *workersdk.Worker, cfg workerConfig, jo
 // present, wins) and returns how long to wait before retrying.
 func observe429(ctx context.Context, w *workersdk.Worker, rl *StravaRateLimitError) time.Duration {
 	now := time.Now().UTC()
-	windowReset, bucket := rateLimitReset(rl.Headers, now)
+	windowReset, window := rateLimitReset(rl.Headers, now)
+	bucket := rateBucket(rl.App, window)
 	if rl.RetryAfter > 0 {
 		windowReset = now.Add(rl.RetryAfter)
 	}
@@ -803,7 +814,7 @@ func runBackfill(ctx context.Context, w *workersdk.Worker, cfg workerConfig, cli
 		return &port.TerminalError{Reason: "bad_payload", Cause: err}
 	}
 
-	token, err := w.FetchToken(ctx, in.AccountID)
+	token, err := fetchToken(ctx, w, in.AccountID)
 	if err != nil {
 		return err
 	}
@@ -862,7 +873,7 @@ func (e *activityListError) Unwrap() error { return e.err }
 // back as *activityListError; reserve and visit errors pass through.
 func listActivityPages(ctx context.Context, w *workersdk.Worker, client *stravaClient, accessToken string, after int64, perPage int, visit func([]stravaActivitySummary) (more bool, err error)) error {
 	for page := 1; ; page++ {
-		if err := reserveRead(ctx, w, rateBucket("short")); err != nil {
+		if err := reserveRead(ctx, w, rateBucket(appFor(accessToken), "short")); err != nil {
 			return err
 		}
 		summaries, err := client.ListAthleteActivities(ctx, accessToken, after, page, perPage)
@@ -941,7 +952,7 @@ func runReconcile(ctx context.Context, w *workersdk.Worker, cfg workerConfig, cl
 		return &port.TerminalError{Reason: "bad_payload", Cause: err}
 	}
 
-	token, err := w.FetchToken(ctx, in.AccountID)
+	token, err := fetchToken(ctx, w, in.AccountID)
 	if err != nil {
 		return err
 	}

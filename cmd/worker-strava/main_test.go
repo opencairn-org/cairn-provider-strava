@@ -77,7 +77,7 @@ func TestRegisterHandlers_SyncsUsageAndWebhooks(t *testing.T) {
 	client := newStravaClient()
 	registerHandlers(w, workerConfig{WorkerName: workerName}, client, quietLogger())
 
-	client.onUsage(10, 100, 20, 1000)
+	client.onUsage("", 10, 100, 20, 1000)
 	for _, key := range []string{"strava.strava-fetcher.short", "strava.strava-fetcher.daily"} {
 		if _, err := kv.Get(context.Background(), key); err != nil {
 			t.Errorf("usage not synced to %s: %v", key, err)
@@ -283,17 +283,17 @@ func TestStravaClient_OtherEndpoints(t *testing.T) {
 func TestReportUsage_FallsBackToOverallHeaders(t *testing.T) {
 	var got [4]int
 	c := newStravaClient()
-	c.onUsage = func(us, ls, ud, ld int) { got = [4]int{us, ls, ud, ld} }
+	c.onUsage = func(_ string, us, ls, ud, ld int) { got = [4]int{us, ls, ud, ld} }
 	h := http.Header{}
 	h.Set("X-RateLimit-Limit", "200,2000")
 	h.Set("X-RateLimit-Usage", "150,900")
-	c.reportUsage(h)
+	c.reportUsage(h, "")
 	if got != [4]int{150, 200, 900, 2000} {
 		t.Errorf("got %v", got)
 	}
 	got = [4]int{}
 	h.Set("X-RateLimit-Usage", "x,1")
-	c.reportUsage(h)
+	c.reportUsage(h, "")
 	if got != [4]int{} {
 		t.Errorf("malformed headers must be ignored, got %v", got)
 	}
@@ -369,7 +369,20 @@ func TestMirrorPhoto_Failures(t *testing.T) {
 	}
 	offline := newStravaClient()
 	offline.baseURL = "http://127.0.0.1:1"
-	if got := listActivityPhotos(ctx, bare, offline, "t", rateBucket("short"), "1", nil); got != nil {
+	if got := listActivityPhotos(ctx, bare, offline, "t", rateBucket("", "short"), "1", nil); got != nil {
 		t.Error("no photos and no activity must yield nil")
+	}
+}
+
+func TestRateBucket_PerApp(t *testing.T) {
+	if rateBucket("", "short") != "strava:strava-fetcher:short" || rateBucket("app1", "daily") != "strava:app1:daily" {
+		t.Fatalf("buckets: %s %s", rateBucket("", "short"), rateBucket("app1", "daily"))
+	}
+	if siblingBucket("strava:app1:short", "daily") != "strava:app1:daily" {
+		t.Fatal("siblingBucket")
+	}
+	tokenApps.Store("tok", "app1")
+	if appFor("tok") != "app1" || appFor("other") != "" {
+		t.Fatal("appFor")
 	}
 }

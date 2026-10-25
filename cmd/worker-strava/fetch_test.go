@@ -379,13 +379,13 @@ func TestFetchSource_BudgetExhaustion(t *testing.T) {
 	in := fetchSourceJob{JobID: "j", ExtID: "42", FetchStreams: true}
 	var nak *port.NakWithDelayError
 
-	h2, _ := limitedHarness(t, &stravaAPI{}, map[string]int{rateBucket("short"): 1})
+	h2, _ := limitedHarness(t, &stravaAPI{}, map[string]int{rateBucket("", "short"): 1})
 	if err := makeFetchSourceHandler(workerConfig{}, h2.client)(context.Background(), h2.w, fetchJob(in)); !errors.As(err, &nak) {
 		t.Errorf("streams reserve: err = %v", err)
 	}
 
 	// Activity, streams and photos fit; the first segment does not.
-	h3, store := limitedHarness(t, &stravaAPI{}, map[string]int{rateBucket("short"): 3})
+	h3, store := limitedHarness(t, &stravaAPI{}, map[string]int{rateBucket("", "short"): 3})
 	err := makeFetchSourceHandler(workerConfig{}, h3.client)(context.Background(), h3.w, fetchJob(in))
 	if !errors.As(err, &nak) || nak.Reason != "rate_limited_segments" {
 		t.Errorf("segment reserve: err = %v", err)
@@ -394,7 +394,7 @@ func TestFetchSource_BudgetExhaustion(t *testing.T) {
 		t.Errorf("results = %d; want activity only", n)
 	}
 
-	h4, _ := limitedHarness(t, &stravaAPI{}, map[string]int{rateBucket("daily"): 1})
+	h4, _ := limitedHarness(t, &stravaAPI{}, map[string]int{rateBucket("", "daily"): 1})
 	_ = makeFetchSourceHandler(workerConfig{}, h4.client)(context.Background(), h4.w, fetchJob(fetchSourceJob{JobID: "a", ExtID: "42"}))
 	if err := makeFetchSourceHandler(workerConfig{}, h4.client)(context.Background(), h4.w, fetchJob(fetchSourceJob{JobID: "b", ExtID: "42"})); !errors.As(err, &nak) {
 		t.Errorf("daily budget: err = %v", err)

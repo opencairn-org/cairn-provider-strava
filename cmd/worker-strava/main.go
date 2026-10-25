@@ -28,6 +28,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -76,11 +77,38 @@ const (
 	jobImportGear  = "import_gear"
 )
 
-// rateBucketPool is the pool name in rate-limit bucket keys: budgets are per
-// pool, i.e. per provider app (core reads <provider>.<pool>.<window>).
+// Rate-limit buckets are per Strava app: strava:<app>:<window>, where app is
+// the core-issued id of the connection's app (core reads
+// <provider>.<app>.<window>). A token without an app id (older core) falls
+// back to the pool's bucket strava:<pool>:<window>.
 var rateBucketPool = workerName
 
-func rateBucket(window string) string { return workerProvider + ":" + rateBucketPool + ":" + window }
+func rateBucket(app, window string) string {
+	if app == "" {
+		app = rateBucketPool
+	}
+	return workerProvider + ":" + app + ":" + window
+}
+
+// tokenApps remembers which app each access token belongs to, so the API
+// client can attribute usage headers and 429s to the right bucket.
+var tokenApps sync.Map
+
+// fetchToken is w.FetchToken plus the token→app bookkeeping.
+func fetchToken(ctx context.Context, w *workersdk.Worker, accountID string) (workersdk.Token, error) {
+	tok, err := w.FetchToken(ctx, accountID)
+	if err == nil && tok.AccessToken != "" {
+		tokenApps.Store(tok.AccessToken, tok.AppID)
+	}
+	return tok, err
+}
+
+func appFor(accessToken string) string {
+	if v, ok := tokenApps.Load(accessToken); ok {
+		return v.(string)
+	}
+	return ""
+}
 
 // workerRelease is the release tag, stamped at build time
 // (-ldflags "-X main.workerRelease=v0.5.0"); core requires the same major.minor.
@@ -157,11 +185,12 @@ func registerHandlers(w *workersdk.Worker, cfg workerConfig, client *stravaClien
 	// Sync the shared limiter to the budget Strava reports on every response —
 	// authoritative capacities instead of the configured guesses, anchored to
 	// Strava's real reset boundaries (quarter-hour / midnight UTC).
-	client.onUsage = func(usedShort, limitShort, usedDaily, limitDaily int) {
+	client.appOf = appFor
+	client.onUsage = func(app string, usedShort, limitShort, usedDaily, limitDaily int) {
 		bg := context.Background()
 		now := time.Now().UTC()
-		_ = w.ObserveUsage(bg, rateBucket("short"), usedShort, limitShort, nextQuarterHour(now))
-		_ = w.ObserveUsage(bg, rateBucket("daily"), usedDaily, limitDaily, nextMidnightUTC(now))
+		_ = w.ObserveUsage(bg, rateBucket(app, "short"), usedShort, limitShort, nextQuarterHour(now))
+		_ = w.ObserveUsage(bg, rateBucket(app, "daily"), usedDaily, limitDaily, nextMidnightUTC(now))
 	}
 	handlers := map[string]workersdk.HandlerFunc{
 		jobFetchSource: makeFetchSourceHandler(cfg, client),
