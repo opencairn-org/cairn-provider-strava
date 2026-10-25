@@ -6,6 +6,34 @@ to follow [Semantic Versioning](https://semver.org/). Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-10-25
+
+Needs cairn-core 0.5.0 (per-pool subjects and the release check; the Core
+must be upgraded first). Upgrade the worker in place: it drains jobs queued
+on the 0.4 subjects once.
+
+### Added
+- Parser version `1.1` (gear per activity, added in 0.4.0 without a bump) on
+  dataset 1; `TestParserGolden` pins the parsed output per parser version.
+  `parse_blob` refuses archives of another dataset and hands back jobs whose
+  `min_parser_version` is newer, backing off for about an hour before
+  reporting `parser_too_old`.
+- The release is stamped at build time and sent in presence and results; the
+  worker refuses to run against an incompatible core (same major.minor before
+  1.0, same major and minor ≤ core's from 1.0).
+- Rate-limit buckets per Strava app (`app_id` from the token reply,
+  `strava:<app>:<window>`); a token without an app id uses the pool's bucket.
+
+### Changed
+- Jobs, discovery, results and the account lookup are per pool:
+  `cairn.jobs.<job>.strava.<name>`, `cairn.discover.strava.<name>`,
+  `cairn.results.<job>.strava.<name>`, `cairn.accounts.lookup.strava.<name>`.
+  Sub-jobs from reconcile and webhooks go to the own pool.
+
+### Fixed
+- 4xx Strava responses other than 429 (e.g. 403 application inactive) fail
+  the job instead of being retried forever.
+
 ## [0.4.0] — 2026-10-21
 
 Needs cairn-core 0.4.0 or later (gear events and the `import_gear` job are
