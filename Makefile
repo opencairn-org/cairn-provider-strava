@@ -89,7 +89,7 @@ check-fast: ## before every commit (< 30 s)
 check: lint test cover audit build ## definition of green (< 10 min)
 	fleetlint check --fail-on error
 
-release: ## refuse dirty/non-main -> check -> signed tag V (its CHANGELOG.md section must exist); pushing the tag runs the build workflow
+release: ## refuse dirty/non-main -> check -> signed tag V (its CHANGELOG.md section must exist); pushing the tag runs the build workflow (image + GitHub release)
 	@test -n "$(V)" || { echo "usage: make release V=vX.Y.Z"; exit 1; }
 	@test -z "$$(git status --porcelain)" || { echo "dirty tree"; exit 1; }
 	@test "$$(git branch --show-current)" = "$(MAIN_BRANCH)" || { echo "not on $(MAIN_BRANCH)"; exit 1; }

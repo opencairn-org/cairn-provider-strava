@@ -6,6 +6,12 @@ to follow [Semantic Versioning](https://semver.org/). Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Added
+- A v* tag now also publishes the GitHub release: the tag's CHANGELOG.md
+  section as notes plus the image digest and verify commands, with an SPDX
+  SBOM of that digest (syft) attached. Before, the release object was created
+  by hand (and skipped for 0.5.0).
+
 ## [0.5.0] — 2026-10-25
 
 Needs cairn-core 0.5.0 (per-pool subjects and the release check; the Core
