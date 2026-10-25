@@ -59,20 +59,26 @@ const (
 	workerProvider = "strava"
 	jobStream      = "CAIRN_JOBS"
 
-	// workerVersion + workerPackage are compile-time identity: together with the
-	// capability manifest they define this worker's schema/contract. They are
-	// baked into the binary (NOT env-overridable) — bump them in source when the
-	// worker's output shape or version changes, then rebuild.
-	workerVersion = "1"
-	workerPackage = "cairns.internal.strava-importer"
+	// Versions (cairn-core ADR 0005), baked into the binary, not
+	// env-overridable. datasetVersion is the archive format the importer
+	// writes; bump it only when the parser can no longer read the previous
+	// one. workerVersion is the parser version datasetVersion.M: bump M with
+	// EVERY change to the parsed output (TestParserGolden enforces it).
+	datasetVersion = 1
+	workerVersion  = "1.1" // 1.1: gear id per activity
+	workerPackage  = "cairns.internal.strava-importer"
 
-	subjFetchSource = "cairn.jobs.fetch_source.strava"
-	subjParseBlob   = "cairn.jobs.parse_blob.strava"
-	subjBackfill    = "cairn.jobs.backfill.strava"
-	subjReconcile   = "cairn.jobs.reconcile.strava"
-	subjImportGear  = "cairn.jobs.import_gear.strava"
-	subjDiscover    = "cairn.discover.strava"
+	// Job kinds; the subjects are per pool (w.JobSubject, ADR 0006).
+	jobFetchSource = "fetch_source"
+	jobParseBlob   = "parse_blob"
+	jobBackfill    = "backfill"
+	jobReconcile   = "reconcile"
+	jobImportGear  = "import_gear"
 )
+
+// workerRelease is the release tag, stamped at build time
+// (-ldflags "-X main.workerRelease=v0.5.0"); core requires the same major.minor.
+var workerRelease = ""
 
 func main() {
 	cfg, err := loadConfig()
@@ -101,6 +107,7 @@ func run(cfg workerConfig, logger *slog.Logger) error {
 		Name:       cfg.WorkerName,
 		InstanceID: cfg.InstanceID,
 		Version:    workerVersion,
+		Release:    workerRelease,
 		Package:    workerPackage,
 		Provider:   workerProvider,
 		Bus:        bus,
@@ -121,7 +128,7 @@ func run(cfg workerConfig, logger *slog.Logger) error {
 	defer cancel()
 
 	// Discovery responder (request/reply): the Core asks what's importable.
-	discSub, err := bus.RespondTo(ctx, subjDiscover, makeDiscoverHandler(w, client))
+	discSub, err := bus.RespondTo(ctx, w.DiscoverSubject(), makeDiscoverHandler(w, client))
 	if err != nil {
 		return fmt.Errorf("register discover responder: %w", err)
 	}
@@ -130,7 +137,8 @@ func run(cfg workerConfig, logger *slog.Logger) error {
 	logger.Info("strava worker starting",
 		"instance", cfg.InstanceID,
 		"version", workerVersion,
-		"handlers", []string{subjFetchSource, subjParseBlob, subjBackfill, subjReconcile, subjImportGear},
+		"release", workerRelease,
+		"pool", w.JobSubject("*"),
 	)
 
 	return w.Run(ctx)
@@ -148,11 +156,18 @@ func registerHandlers(w *workersdk.Worker, cfg workerConfig, client *stravaClien
 		_ = w.ObserveUsage(bg, "strava:short", usedShort, limitShort, nextQuarterHour(now))
 		_ = w.ObserveUsage(bg, "strava:daily", usedDaily, limitDaily, nextMidnightUTC(now))
 	}
-	w.Handle(subjFetchSource, makeFetchSourceHandler(cfg, client))
-	w.Handle(subjParseBlob, makeParseBlobHandler(cfg))
-	w.Handle(subjBackfill, makeBackfillHandler(cfg, client))
-	w.Handle(subjReconcile, makeReconcileHandler(cfg, client))
-	w.Handle(subjImportGear, makeImportGearHandler(cfg, client))
+	handlers := map[string]workersdk.HandlerFunc{
+		jobFetchSource: makeFetchSourceHandler(cfg, client),
+		jobParseBlob:   makeParseBlobHandler(cfg),
+		jobBackfill:    makeBackfillHandler(cfg, client),
+		jobReconcile:   makeReconcileHandler(cfg, client),
+		jobImportGear:  makeImportGearHandler(cfg, client),
+	}
+	for job, fn := range handlers {
+		w.Handle(w.JobSubject(job), fn)
+		// Pre-0.5 subject, drained once after the upgrade. Remove in 0.6.
+		w.HandleLegacy("cairn.jobs."+job+"."+workerProvider, fn)
+	}
 
 	// Webhook handlers — registered ONLY if CAIRN_STRAVA_WEBHOOK_VERIFY_TOKEN
 	// is set. Without it, this worker instance doesn't claim Strava's

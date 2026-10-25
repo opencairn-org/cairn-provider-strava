@@ -30,7 +30,7 @@ COPY . .
 ARG VERSION=docker
 # -trimpath and an empty build id keep the binary reproducible.
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
-    -ldflags="-s -w -buildid=" \
+    -ldflags="-s -w -buildid= -X main.workerRelease=${VERSION}" \
     -o /out/worker-strava ./cmd/worker-strava
 
 # ---- runtime stage --------------------------------------------------------

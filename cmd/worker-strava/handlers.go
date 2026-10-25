@@ -487,6 +487,7 @@ func newJobResult(cfg workerConfig, events ...*workerv1.WorkerEvent) *workerv1.J
 		WorkerName:    cfg.WorkerName,
 		WorkerVersion: workerVersion,
 		WorkerPackage: workerPackage,
+		WorkerRelease: workerRelease,
 		Events:        events,
 	}
 }
@@ -675,7 +676,10 @@ type parseBlobJob struct {
 	Provider  string `json:"provider"`
 	AccountID string `json:"account_id"` // external_account_id for the rebuilt ref
 	ExtID     string `json:"ext_id"`     // provider activity id for the rebuilt ref
-	Blob      struct {
+	// MinParserVersion is the source's current parser version; an older
+	// parser must not re-parse it (ADR 0005).
+	MinParserVersion string `json:"min_parser_version"`
+	Blob             struct {
 		URL            string    `json:"url"`
 		ExpiresAt      time.Time `json:"expires_at"`
 		FallbackHandle string    `json:"fallback_handle"` // raw_blob_id (full S3 key) for re-presign
@@ -696,6 +700,14 @@ func makeParseBlobHandler(cfg workerConfig) func(context.Context, *workersdk.Wor
 		if err := json.Unmarshal(job.Body, &in); err != nil {
 			return &port.TerminalError{Reason: "bad_payload", Cause: err}
 		}
+		// Rolling upgrade: leave it to a newer instance of the pool.
+		if !workersdk.ParserAllows(workerVersion, in.MinParserVersion) {
+			return &port.NakWithDelayError{
+				Reason: "parser_too_old",
+				Delay:  30 * time.Second,
+				Cause:  fmt.Errorf("source parsed by %s, this parser is %s", in.MinParserVersion, workerVersion),
+			}
+		}
 
 		url, err := blobDownloadURL(ctx, w, in)
 		if err != nil {
@@ -706,27 +718,30 @@ func makeParseBlobHandler(cfg workerConfig) func(context.Context, *workersdk.Wor
 		if err != nil {
 			return fmt.Errorf("download archive: %w", err) // transient → NAK
 		}
-
-		payload := mapActivityToPayload(arch.Activity)
-		protoStream := mapStreamsToProto(arch.Streams)
-
-		extID := in.ExtID
-		if extID == "" {
-			extID = formatActivityID(arch.Activity.ID)
+		if arch.Version != datasetVersion {
+			return &port.TerminalError{Reason: "dataset_mismatch", Cause: fmt.Errorf("archive dataset %d, parser reads %d", arch.Version, datasetVersion)}
 		}
 
-		// Archived JSON carries the gear summary, so a reparse backfills gear
-		// on old imports without spending API budget.
 		ref := fetchSourceJob{UserID: in.UserID, AccountID: in.AccountID}
-		events := activityEvents(ref, arch.Activity, &workerv1.ImportedActivity{
-			Ref:       externalRef(ref, extID),
-			Payload:   payload,
-			Stream:    protoStream,
-			RawBlobId: in.Blob.FallbackHandle, // keep the archive reference stable
-		})
-
+		events := parseArchive(ref, in.ExtID, in.Blob.FallbackHandle, arch)
 		return publishResultViaBlob(ctx, w, job, "result:"+in.JobID, newJobResult(cfg, events...))
 	}
+}
+
+// parseArchive is the parser proper: archived bytes in, events out. Its
+// output is pinned per parser version by TestParserGolden.
+func parseArchive(ref fetchSourceJob, extID, blobID string, arch archivedActivity) []*workerv1.WorkerEvent {
+	if extID == "" {
+		extID = formatActivityID(arch.Activity.ID)
+	}
+	// Archived JSON carries the gear summary, so a reparse backfills gear
+	// on old imports without spending API budget.
+	return activityEvents(ref, arch.Activity, &workerv1.ImportedActivity{
+		Ref:       externalRef(ref, extID),
+		Payload:   mapActivityToPayload(arch.Activity),
+		Stream:    mapStreamsToProto(arch.Streams),
+		RawBlobId: blobID, // keep the archive reference stable
+	})
 }
 
 // blobDownloadURL resolves a usable download URL: it re-presigns from the
@@ -873,7 +888,7 @@ func enqueueFetchSource(ctx context.Context, w *workersdk.Worker, jobID, account
 		Reason:       reason,
 	})
 	msgID := reason + ":" + workerProvider + ":" + accountID + ":" + extID
-	return w.Enqueue(ctx, subjFetchSource, msgID, body)
+	return w.Enqueue(ctx, w.JobSubject(jobFetchSource), msgID, body)
 }
 
 // ---------------------------------------------------------------------------

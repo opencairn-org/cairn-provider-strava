@@ -165,7 +165,7 @@ func fetchHarness(t *testing.T, api *stravaAPI) (*harness, *blobStore) {
 
 func fetchJob(in fetchSourceJob) workersdk.Job {
 	body, _ := json.Marshal(in)
-	return workersdk.Job{Subject: subjFetchSource, Body: body, DeliveryAttempt: 1}
+	return workersdk.Job{Subject: "cairn.jobs.fetch_source.strava.strava-fetcher", Body: body, DeliveryAttempt: 1}
 }
 
 const resultsFetch = "cairn.results.fetch_source.strava"
@@ -407,7 +407,7 @@ func parseJob(t *testing.T, in parseBlobJob) workersdk.Job {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return workersdk.Job{Subject: subjParseBlob, Body: body}
+	return workersdk.Job{Subject: "cairn.jobs.parse_blob.strava.strava-fetcher", Body: body}
 }
 
 func TestParseBlob(t *testing.T) {
@@ -476,5 +476,33 @@ func TestParseBlob(t *testing.T) {
 	in.Blob.URL, in.Blob.ExpiresAt, in.Blob.FallbackHandle = "", time.Time{}, "raw1"
 	if err := handler(ctx, w, parseJob(t, in)); err == nil || errors.As(err, &term) {
 		t.Errorf("presign failure = %v; want retryable", err)
+	}
+}
+
+func TestParseBlob_VersionGuards(t *testing.T) {
+	h, store := fetchHarness(t, &stravaAPI{})
+	handler := makeParseBlobHandler(workerConfig{WorkerName: workerName})
+	ctx := context.Background()
+
+	// A source parsed by a newer parser: NAK so a newer pool instance takes it.
+	var in parseBlobJob
+	in.JobID, in.UserID, in.MinParserVersion = "p1", "u1", "1.99"
+	in.Blob.URL = store.srv.URL + "/never-fetched"
+	var nak *port.NakWithDelayError
+	if err := handler(ctx, h.w, parseJob(t, in)); !errors.As(err, &nak) || nak.Reason != "parser_too_old" {
+		t.Fatalf("newer source: err = %v", err)
+	}
+
+	// An archive of another dataset is unreadable for this parser.
+	future, _ := json.Marshal(archivedActivity{Version: datasetVersion + 1, Activity: &stravaActivity{ID: 1}})
+	store.put("future", future)
+	in.MinParserVersion = ""
+	in.Blob.URL = store.srv.URL + "/future"
+	var term *port.TerminalError
+	if err := handler(ctx, h.w, parseJob(t, in)); !errors.As(err, &term) || term.Reason != "dataset_mismatch" {
+		t.Fatalf("other dataset: err = %v", err)
+	}
+	if res := store.results(t, h, "cairn.results.parse_blob.strava"); len(res) != 0 {
+		t.Fatalf("guarded jobs published results: %v", res)
 	}
 }

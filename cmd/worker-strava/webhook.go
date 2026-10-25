@@ -97,7 +97,7 @@ func handleWebhookEvent(ctx context.Context, w *workersdk.Worker, ev workersdk.W
 			"aspect_type":   sev.AspectType,
 		})
 		msgID := fmt.Sprintf("fetch:strava:%d:%d", sev.OwnerID, sev.ObjectID)
-		return w.Enqueue(ctx, "cairn.jobs.fetch_source.strava", msgID, body)
+		return w.Enqueue(ctx, w.JobSubject(jobFetchSource), msgID, body)
 
 	case "delete":
 		body, _ := json.Marshal(map[string]any{

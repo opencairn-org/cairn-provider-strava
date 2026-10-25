@@ -30,8 +30,8 @@
 //	if err != nil {
 //	    return err
 //	}
-//	w.Handle("cairn.jobs.fetch_source.strava", makeFetchSourceHandler(cfg, client))
-//	w.Handle("cairn.jobs.backfill.strava", makeBackfillHandler(cfg, client))
+//	w.Handle(w.JobSubject("fetch_source"), makeFetchSourceHandler(cfg, client))
+//	w.Handle(w.JobSubject("backfill"), makeBackfillHandler(cfg, client))
 //	return w.Run(ctx)
 //
 // The HandlerFunc receives a Job with the body + headers + helpers
@@ -50,6 +50,7 @@ import (
 	"log/slog"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -72,12 +73,17 @@ type Config struct {
 	// process start.
 	InstanceID string
 
-	// Version is the worker's binary version (a simple incrementing
-	// integer, e.g. "1"). Reported in heartbeats + the manifest; the server
-	// triggers update-available for older sources from the same package when
-	// a higher version arrives. Part of the (provider, package, version)
-	// compatibility contract.
+	// Version is the parser version "N.M" (cairn-core ADR 0005): N is the
+	// dataset (archive format) it reads, M is bumped on every change to the
+	// parsed output. Reported in heartbeats + the manifest; core flags older
+	// sources of the same package and only lets parsers >= a source's
+	// version re-parse it.
 	Version string
+
+	// Release is the build's release tag (e.g. "v0.5.1"). Its major.minor
+	// must match core's; an untagged build (empty, commit sha) skips the
+	// check.
+	Release string
 
 	// Provider is the external system this worker talks to ("strava",
 	// "garmin", etc.). Used to scope rate-limiter buckets and token
@@ -151,6 +157,8 @@ type Worker struct {
 	pulls    []port.PullSubscription
 	wg       sync.WaitGroup
 	stopCh   chan struct{}
+	legacy   map[string]HandlerFunc
+	fatal    chan error
 	stopOnce sync.Once
 
 	// webhooks holds optional WebhookEvent/WebhookVerify registrations
@@ -197,6 +205,8 @@ func New(cfg Config) (*Worker, error) {
 		logger:   cfg.Logger.With("worker", cfg.Name, "instance", cfg.InstanceID),
 		handlers: map[string]HandlerFunc{},
 		stopCh:   make(chan struct{}),
+		legacy:   map[string]HandlerFunc{},
+		fatal:    make(chan error, 1),
 	}
 	w.tokens = newTokenCache(cfg.Bus, cfg.Provider, cfg.Auth, cfg.TokenFetchTimeout, w.logger)
 	return w, nil
@@ -223,7 +233,7 @@ func (w *Worker) WorkerKey() string {
 type HandlerFunc func(ctx context.Context, w *Worker, job Job) error
 
 // Handle registers a HandlerFunc for a specific job subject. The subject
-// is the durable consumer's filter; e.g. "cairn.jobs.fetch_source.strava".
+// is the durable consumer's filter; e.g. w.JobSubject("fetch_source").
 //
 // Must be called BEFORE Run. Calling Handle twice on the same subject
 // panics — it's almost always a bug.
@@ -265,6 +275,9 @@ func (w *Worker) Run(ctx context.Context) error {
 	if len(w.handlers) == 0 && w.webhooks.event == nil && w.webhooks.verify == nil {
 		return errors.New("workersdk: no handlers registered; call Handle/WebhookEvent/WebhookVerify before Run")
 	}
+	if err := w.checkCoreRelease(ctx); err != nil {
+		return err
+	}
 
 	if err := w.publishHeartbeat(ctx); err != nil {
 		w.logger.Warn("initial heartbeat failed", "error", err)
@@ -274,18 +287,15 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 
 	for subject, fn := range w.handlers {
-		ps, err := w.cfg.Bus.Pull(ctx, port.ConsumerConfig{
-			Stream:        w.cfg.JobStream,
-			Durable:       consumerName(w.cfg.Name, subject),
-			Subject:       subject,
-			DeliverPolicy: port.DeliverAll,
-		})
-		if err != nil {
-			return fmt.Errorf("subscribe %s: %w", subject, err)
+		if err := w.startPull(ctx, subject, fn); err != nil {
+			return err
 		}
-		w.pulls = append(w.pulls, ps)
-		w.wg.Add(1)
-		go w.pullLoop(ctx, ps, subject, fn)
+	}
+	for subject, fn := range w.legacy {
+		if err := w.startPull(ctx, subject, fn); err != nil {
+			// Another pool may already drain it (work queues allow one).
+			w.logger.Warn("legacy subject not drained", "subject", subject, "error", err)
+		}
 	}
 
 	// Webhook subscribers (optional — only started if WebhookEvent or
@@ -299,11 +309,33 @@ func (w *Worker) Run(ctx context.Context) error {
 	w.wg.Add(1)
 	go w.heartbeatLoop(ctx)
 
-	<-ctx.Done()
+	var fatal error
+	select {
+	case <-ctx.Done():
+	case fatal = <-w.fatal:
+	}
 	for _, s := range webhookSubs {
 		_ = s.Close(context.Background())
 	}
-	return w.shutdown()
+	w.shutdown()
+	return fatal
+}
+
+// startPull subscribes the durable consumer for subject and runs its loop.
+func (w *Worker) startPull(ctx context.Context, subject string, fn HandlerFunc) error {
+	ps, err := w.cfg.Bus.Pull(ctx, port.ConsumerConfig{
+		Stream:        w.cfg.JobStream,
+		Durable:       consumerName(w.cfg.Name, subject),
+		Subject:       subject,
+		DeliverPolicy: port.DeliverAll,
+	})
+	if err != nil {
+		return fmt.Errorf("subscribe %s: %w", subject, err)
+	}
+	w.pulls = append(w.pulls, ps)
+	w.wg.Add(1)
+	go w.pullLoop(ctx, ps, subject, fn)
+	return nil
 }
 
 // Stop signals the worker to drain and exit. Safe to call multiple times.
@@ -311,7 +343,7 @@ func (w *Worker) Stop() {
 	w.stopOnce.Do(func() { close(w.stopCh) })
 }
 
-func (w *Worker) shutdown() error {
+func (w *Worker) shutdown() {
 	w.Stop()
 	for _, p := range w.pulls {
 		_ = p.Close(context.Background())
@@ -324,7 +356,6 @@ func (w *Worker) shutdown() error {
 		w.logger.Warn("shutdown: drain timeout exceeded; some goroutines still running")
 	}
 	w.logger.Info("worker stopped")
-	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -502,8 +533,8 @@ func (w *Worker) heartbeatLoop(ctx context.Context) {
 		case <-w.stopCh:
 			return
 		case <-ticker.C:
-			if err := w.publishHeartbeat(ctx); err != nil {
-				w.logger.Debug("heartbeat publish failed", "error", err)
+			if !w.beat(ctx) {
+				return
 			}
 		case <-manifestTicker.C:
 			if err := w.publishManifest(ctx); err != nil {
@@ -513,13 +544,31 @@ func (w *Worker) heartbeatLoop(ctx context.Context) {
 	}
 }
 
+// beat publishes presence and re-checks core's release; false once core moved
+// to an incompatible release (Run then returns the error).
+func (w *Worker) beat(ctx context.Context) bool {
+	if err := w.publishHeartbeat(ctx); err != nil {
+		w.logger.Debug("heartbeat publish failed", "error", err)
+	}
+	err := w.checkCoreRelease(ctx)
+	if err == nil {
+		return true
+	}
+	select {
+	case w.fatal <- err:
+	default:
+	}
+	return false
+}
+
 type heartbeatPayload struct {
 	WorkerName string `json:"worker_name"`
 	// WorkerKey is the composite identity {name}-{provider} (e.g. worker1-strava)
 	// — the routing token for worker-owned subjects and the webhook URL.
 	WorkerKey  string `json:"worker_key"`
 	InstanceID string `json:"instance_id"`
-	Version    string `json:"version"`
+	Version    string `json:"version"` // parser version N.M
+	Release    string `json:"release,omitempty"`
 	Provider   string `json:"provider"` // the service type the worker connects (e.g. "strava")
 	Package    string `json:"package"`  // fully-qualified package/build identity
 	// Build info, self-reported each heartbeat so the operator can see exactly
@@ -573,6 +622,7 @@ func (w *Worker) publishHeartbeat(ctx context.Context) error {
 		WorkerKey:    w.WorkerKey(),
 		InstanceID:   w.cfg.InstanceID,
 		Version:      w.cfg.Version,
+		Release:      w.cfg.Release,
 		Provider:     w.cfg.Provider,
 		Package:      w.cfg.Package,
 		GoVersion:    goVer,
@@ -787,13 +837,17 @@ func consumerName(worker, subject string) string {
 func (w *Worker) Logger() *slog.Logger { return w.logger }
 
 // deriveResultSubject converts a job subject into the canonical result
-// subject. E.g. "cairn.jobs.fetch_source.strava" → "cairn.results.fetch_source.strava".
+// subject. Results are provider-scoped, so the pool token is dropped:
+// "cairn.jobs.fetch_source.strava.w1" → "cairn.results.fetch_source.strava".
 func deriveResultSubject(jobSubject string) string {
-	const jobsPrefix = "cairn.jobs."
-	if len(jobSubject) > len(jobsPrefix) && jobSubject[:len(jobsPrefix)] == jobsPrefix {
-		return "cairn.results." + jobSubject[len(jobsPrefix):]
+	rest, ok := strings.CutPrefix(jobSubject, "cairn.jobs.")
+	if !ok || rest == "" {
+		return jobSubject + ".result"
 	}
-	return jobSubject + ".result"
+	if parts := strings.SplitN(rest, ".", 3); len(parts) >= 2 {
+		rest = parts[0] + "." + parts[1]
+	}
+	return "cairn.results." + rest
 }
 
 // randID generates a short random identifier for the worker instance.

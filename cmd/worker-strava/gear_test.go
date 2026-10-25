@@ -17,7 +17,7 @@ import (
 
 func gearJob(in importGearJob) workersdk.Job {
 	body, _ := json.Marshal(in)
-	return workersdk.Job{Subject: subjImportGear, Body: body, DeliveryAttempt: 1}
+	return workersdk.Job{Subject: "cairn.jobs.import_gear.strava.strava-fetcher", Body: body, DeliveryAttempt: 1}
 }
 
 func TestImportGear_PublishesEveryGear(t *testing.T) {

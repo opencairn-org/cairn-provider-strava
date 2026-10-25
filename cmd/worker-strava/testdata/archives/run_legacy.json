@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "provenance": {"provider": "strava", "worker_name": "strava-fetcher", "worker_version": "1", "package": "cairns.internal.strava-importer", "archived_at": "2026-06-01T07:00:00Z"},
+  "activity": {
+    "id": 1000002, "name": "Synthetic run, archived before gear", "type": "Run",
+    "start_date": "2026-06-01T06:00:00Z", "timezone": "(GMT+00:00) UTC",
+    "elapsed_time": 1800, "moving_time": 1750, "distance": 5000, "total_elevation_gain": 12,
+    "average_speed": 2.86, "max_speed": 3.9, "athlete": {"id": 42}
+  }
+}

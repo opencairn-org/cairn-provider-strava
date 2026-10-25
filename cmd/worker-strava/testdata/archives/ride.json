@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "provenance": {"provider": "strava", "worker_name": "strava-fetcher", "worker_version": "1", "package": "cairns.internal.strava-importer", "archived_at": "2026-07-05T00:47:20Z"},
+  "activity": {
+    "id": 1000001, "name": "Synthetic ride", "description": "fixture", "type": "Ride", "sport_type": "GravelRide",
+    "start_date": "2026-07-04T13:40:00Z", "timezone": "(GMT+01:00) Europe/Berlin",
+    "elapsed_time": 600, "moving_time": 540, "distance": 4200.5, "total_elevation_gain": 55.2,
+    "average_speed": 7.78, "max_speed": 12.4, "average_heartrate": 141.2, "max_heartrate": 172, "has_heartrate": true,
+    "average_watts": 182.5, "weighted_average_watts": 190.1, "max_watts": 420, "average_cadence": 86.4, "average_temp": 21,
+    "calories": 310, "kilojoules": 98.6, "commute": true, "workout_type": 10,
+    "gear_id": "b1234", "gear": {"id": "b1234", "primary": true, "name": "Gravel bike", "nickname": "Gravel bike", "distance": 1234567},
+    "athlete": {"id": 42},
+    "laps": [
+      {"lap_index": 1, "name": "Lap 1", "elapsed_time": 300, "moving_time": 270, "start_date": "2026-07-04T13:40:00Z", "distance": 2100.2, "total_elevation_gain": 30.1, "average_speed": 7.7, "max_speed": 12.4, "average_heartrate": 138, "max_heartrate": 165, "average_watts": 180, "average_cadence": 85},
+      {"lap_index": 2, "name": "Lap 2", "elapsed_time": 300, "moving_time": 270, "start_date": "2026-07-04T13:45:00Z", "distance": 2100.3, "total_elevation_gain": 25.1, "average_speed": 7.8, "max_speed": 11.9, "average_heartrate": 144, "max_heartrate": 172, "average_watts": 185, "average_cadence": 88}
+    ]
+  },
+  "streams": {
+    "time": {"type": "time", "data": [0, 60, 120, 180, 240, 300]},
+    "latlng": {"type": "latlng", "data": [[52.5, 13.4], [52.501, 13.401], [52.502, 13.402], [52.503, 13.403], [52.504, 13.404], [52.505, 13.405]]},
+    "altitude": {"type": "altitude", "data": [34.0, 35.5, 37.0, 38.2, 36.1, 35.0]},
+    "distance": {"type": "distance", "data": [0, 450.1, 900.3, 1350.2, 1800.9, 2100.2]},
+    "heartrate": {"type": "heartrate", "data": [120, 135, 142, 150, 160, 165]},
+    "watts": {"type": "watts", "data": [150, 175, 190, 200, 210, 180]},
+    "cadence": {"type": "cadence", "data": [80, 84, 86, 88, 90, 85]},
+    "temp": {"type": "temp", "data": [21, 21, 22, 22, 21, 21]},
+    "velocity_smooth": {"type": "velocity_smooth", "data": [0, 7.5, 7.6, 7.7, 7.9, 7.4]}
+  }
+}

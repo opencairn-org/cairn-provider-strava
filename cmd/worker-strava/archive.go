@@ -38,8 +38,6 @@ type archiveProvenance struct {
 	ArchivedAt    time.Time `json:"archived_at"`
 }
 
-const archivedActivityVersion = 1
-
 var archiveHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 // archiveActivityBlob marshals the raw fetched activity (+streams) plus worker
@@ -50,7 +48,7 @@ var archiveHTTPClient = &http.Client{Timeout: 30 * time.Second}
 // without the archive.
 func archiveActivityBlob(ctx context.Context, w *workersdk.Worker, cfg workerConfig, userID string, act *stravaActivity, streams stravaStreamsResponse) (blobID string, sizeBytes int64, err error) {
 	body, err := json.Marshal(archivedActivity{
-		Version: archivedActivityVersion,
+		Version: datasetVersion,
 		Provenance: archiveProvenance{
 			Provider:      workerProvider,
 			WorkerName:    cfg.WorkerName,

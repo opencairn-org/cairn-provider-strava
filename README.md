@@ -67,6 +67,13 @@ and the [provider contract](https://docs.opencairn.org/architecture/provider-con
 - **Parser** (`N.M`, sent as `worker_version`): bump `M` with **every** change
   to the parsed output; a dataset bump resets it to `N.0`. Parser `N.x` must
   read every dataset `N` archive. Versions only move forward.
+  `TestParserGolden` pins the parsed output of `cmd/worker-strava/testdata/archives`
+  per parser version; after a bump, `go test ./cmd/worker-strava -run
+  TestParserGolden -update` writes the new goldens (delete the old ones).
+
+Jobs are routed per pool (core ADR 0006): this worker consumes
+`cairn.jobs.<job>.strava.<CAIRN_WORKER_NAME>`. Instances sharing a name share
+the work; a second name is a separate pool that core assigns accounts to.
 
 ## Develop
 
