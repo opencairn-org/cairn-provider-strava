@@ -35,4 +35,4 @@ CLA. Sign off your commits (`git commit -s`) to assert the
   (Term), `*port.NakWithDelayError` (rate limit) or any other error (NAK and
   retry). New handlers follow `docs/ARCHITECTURE.md`.
 - User-facing changes get a CHANGELOG.md entry; `make release V=vX.Y.Z` refuses
-  a tag without its section.
+  a tag without its section; that section becomes the GitHub release notes.
