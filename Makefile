@@ -19,7 +19,7 @@ GOVULNCHECK_VERSION ?= v1.9.0
 # renovate: datasource=go depName=github.com/google/go-licenses/v2
 GO_LICENSES_VERSION ?= v2.0.1
 # renovate: datasource=go depName=github.com/fleetlint/fleetlint
-FLEETLINT_VERSION   ?= v0.5.1
+FLEETLINT_VERSION   ?= v0.8.1
 # renovate: datasource=go depName=github.com/go-gremlins/gremlins
 GREMLINS_VERSION    ?= v0.6.0
 # Mutation test efficacy floor for the SDK package (75.9% today).
