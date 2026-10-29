@@ -6,11 +6,20 @@ to follow [Semantic Versioning](https://semver.org/). Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-10-29
+
+Released alongside cairn-core 0.6.0. The worker contract (`cairn.worker.v1`)
+is unchanged since 0.5.0, so 0.5.0 workers keep working against a 0.6.0 core
+and this release needs no core upgrade first.
+
 ### Added
 - A v* tag now also publishes the GitHub release: the tag's CHANGELOG.md
   section as notes plus the image digest and verify commands, with an SPDX
   SBOM of that digest (syft) attached. Before, the release object was created
   by hand (and skipped for 0.5.0).
+
+### Changed
+- Dependency updates (fleetlint 0.8.1, CodeQL action).
 
 ## [0.5.0] — 2026-10-25
 
