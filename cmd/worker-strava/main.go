@@ -55,6 +55,31 @@ func stravaManifest() capability.Manifest {
 	}
 }
 
+// stravaProviderMeta is what core needs to connect a Strava account: the
+// authorize endpoint and scopes (the code exchange runs here, see
+// StravaAuthHandler.Exchange) and the labels of the connection's app
+// credentials.
+func stravaProviderMeta() *workersdk.ProviderMeta {
+	return &workersdk.ProviderMeta{
+		DisplayName:         "Strava",
+		ActivityURLTemplate: "https://www.strava.com/activities/{id}",
+		SetupDocsURL:        "https://docs.opencairn.org/self-host/providers/strava",
+		AuthMethod:          workersdk.AuthMethodOAuth2,
+		OAuth: &workersdk.ProviderOAuth{
+			AuthorizeURL:   "https://www.strava.com/oauth/authorize",
+			Scopes:         []string{"read", "activity:read_all"},
+			ScopeSeparator: ",",
+			// Always show Strava's consent screen, so a user can pick a
+			// different athlete for a second connection.
+			AuthorizeParams: map[string]string{"approval_prompt": "force"},
+		},
+		ConfigFields: []workersdk.ProviderField{
+			{Key: "client_id", Label: "Client ID", Help: "From your Strava API application (strava.com/settings/api)."},
+			{Key: "client_secret", Label: "Client secret", Secret: true},
+		},
+	}
+}
+
 const (
 	workerName     = "strava-fetcher"
 	workerProvider = "strava"
@@ -137,20 +162,22 @@ func run(cfg workerConfig, logger *slog.Logger) error {
 	defer bus.Close()
 
 	limiter := newRateLimiter(bus, logger)
+	auth := NewStravaAuthHandler()
 
 	w, err := workersdk.New(workersdk.Config{
-		Name:       cfg.WorkerName,
-		InstanceID: cfg.InstanceID,
-		Version:    workerVersion,
-		Release:    workerRelease,
-		Package:    workerPackage,
-		Provider:   workerProvider,
-		Bus:        bus,
-		Limiter:    limiter,
-		Auth:       NewStravaAuthHandler(),
-		JobStream:  jobStream,
-		Logger:     logger,
-		Manifest:   stravaManifest(),
+		Name:         cfg.WorkerName,
+		InstanceID:   cfg.InstanceID,
+		Version:      workerVersion,
+		Release:      workerRelease,
+		Package:      workerPackage,
+		Provider:     workerProvider,
+		Bus:          bus,
+		Limiter:      limiter,
+		Auth:         auth,
+		JobStream:    jobStream,
+		Logger:       logger,
+		Manifest:     stravaManifest(),
+		ProviderMeta: stravaProviderMeta(),
 	})
 	if err != nil {
 		return err
@@ -168,6 +195,13 @@ func run(cfg workerConfig, logger *slog.Logger) error {
 		return fmt.Errorf("register discover responder: %w", err)
 	}
 	defer func() { _ = discSub.Close(context.Background()) }()
+
+	// Code exchange for the connect flow: core asks this pool (request/reply).
+	exSub, err := w.RespondOAuthExchange(ctx, auth.Exchange)
+	if err != nil {
+		return fmt.Errorf("register oauth exchange responder: %w", err)
+	}
+	defer func() { _ = exSub.Close(context.Background()) }()
 
 	logger.Info("strava worker starting",
 		"instance", cfg.InstanceID,
@@ -206,8 +240,6 @@ func registerHandlers(w *workersdk.Worker, cfg workerConfig, client *stravaClien
 		} else {
 			w.Handle(w.JobSubject(job), fn)
 		}
-		// Pre-0.5 subject, drained once after the upgrade. Remove in 0.6.
-		w.HandleLegacy("cairn.jobs."+job+"."+workerProvider, fn)
 	}
 
 	// Webhook handlers — registered ONLY if CAIRN_STRAVA_WEBHOOK_VERIFY_TOKEN

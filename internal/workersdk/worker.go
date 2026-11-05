@@ -141,6 +141,13 @@ type Config struct {
 	// manifest = the worker declares no typed capabilities (legacy behaviour;
 	// the coarse webhooks flag still works on its own).
 	Manifest capability.Manifest
+
+	// ProviderMeta is what this worker declares about connecting its
+	// provider (display, auth method, OAuth authorize endpoint, connect-form
+	// labels); published in the manifest so core needs no compiled-in
+	// provider knowledge. nil for pools that do not link accounts
+	// (parsers, file importers).
+	ProviderMeta *ProviderMeta
 }
 
 // Worker is the SDK entry point. Construct with New, register handlers
@@ -157,7 +164,6 @@ type Worker struct {
 	pulls  []port.PullSubscription
 	wg     sync.WaitGroup
 	stopCh chan struct{}
-	legacy map[string]HandlerFunc
 	// maxDeliver overrides the consumer's MaxDeliver per subject (0 = bus default).
 	maxDeliver map[string]int
 	fatal      chan error
@@ -207,7 +213,6 @@ func New(cfg Config) (*Worker, error) {
 		logger:     cfg.Logger.With("worker", cfg.Name, "instance", cfg.InstanceID),
 		handlers:   map[string]HandlerFunc{},
 		stopCh:     make(chan struct{}),
-		legacy:     map[string]HandlerFunc{},
 		maxDeliver: map[string]int{},
 		fatal:      make(chan error, 1),
 	}
@@ -294,13 +299,6 @@ func (w *Worker) Run(ctx context.Context) error {
 			return err
 		}
 	}
-	for subject, fn := range w.legacy {
-		if err := w.startPull(ctx, subject, fn); err != nil {
-			// Another pool may already drain it (work queues allow one).
-			w.logger.Warn("legacy subject not drained", "subject", subject, "error", err)
-		}
-	}
-
 	// Webhook subscribers (optional — only started if WebhookEvent or
 	// WebhookVerify was called). Their lifecycle is the explicit Close
 	// call below after ctx.Done.
@@ -653,6 +651,8 @@ type manifestPayload struct {
 	Provider  string    `json:"provider"`
 	Package   string    `json:"package"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// ProviderMeta drives core's connect flow for the provider (see Config).
+	ProviderMeta *ProviderMeta `json:"provider_meta,omitempty"`
 }
 
 func (w *Worker) publishManifest(ctx context.Context) error {
@@ -661,11 +661,12 @@ func (w *Worker) publishManifest(ctx context.Context) error {
 		return err
 	}
 	payload, err := json.Marshal(manifestPayload{
-		WorkerName: w.cfg.Name,
-		Version:    w.cfg.Version,
-		Provider:   w.cfg.Provider,
-		Package:    w.cfg.Package,
-		UpdatedAt:  time.Now().UTC(),
+		WorkerName:   w.cfg.Name,
+		Version:      w.cfg.Version,
+		Provider:     w.cfg.Provider,
+		Package:      w.cfg.Package,
+		UpdatedAt:    time.Now().UTC(),
+		ProviderMeta: w.cfg.ProviderMeta,
 	})
 	if err != nil {
 		return err

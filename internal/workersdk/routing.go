@@ -55,13 +55,6 @@ func (w *Worker) HandleWithMaxDeliver(subject string, fn HandlerFunc, maxDeliver
 	w.maxDeliver[subject] = maxDeliver
 }
 
-// HandleLegacy drains a pre-0.5 provider-only subject with the old durable,
-// so jobs queued before the upgrade are not stranded. Failure to subscribe
-// is logged, not fatal. Remove in 0.6.
-func (w *Worker) HandleLegacy(subject string, fn HandlerFunc) {
-	w.legacy[subject] = fn
-}
-
 // ErrIncompatibleCore is returned when core's release has another
 // major.minor than this worker's.
 var ErrIncompatibleCore = errors.New("workersdk: core release incompatible")

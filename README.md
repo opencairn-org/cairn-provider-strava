@@ -8,16 +8,20 @@ It speaks Cairn's NATS control plane: registers via the enrollment-token flow,
 then consumes jobs on:
 
 ```
-cairn.jobs.fetch_source.strava   pull one activity (backfill/webhook/reconcile)
-cairn.jobs.parse_blob.strava     reparse a stored blob with new worker logic
-cairn.jobs.backfill.strava       list-paginate, fan out fetch_source jobs
-cairn.jobs.reconcile.strava      pull recent activities, enqueue fetch for missing
-cairn.jobs.import_gear.strava    the athlete's bikes and shoes, retired included
-cairn.discover.strava            (request/reply) what's importable
+cairn.jobs.fetch_source.strava.<name>   pull one activity (backfill/webhook/reconcile)
+cairn.jobs.parse_blob.strava.<name>     reparse a stored blob with new worker logic
+cairn.jobs.backfill.strava.<name>       list-paginate, fan out fetch_source jobs
+cairn.jobs.reconcile.strava.<name>      pull recent activities, enqueue fetch for missing
+cairn.jobs.import_gear.strava.<name>    the athlete's bikes and shoes, retired included
+cairn.discover.strava.<name>            (request/reply) what's importable
+cairn.oauth.strava.<name>.exchange      (request/reply) trade a connect-flow code for tokens
 ```
 
-It publishes `cairn.worker.v1.JobResult` and heartbeats its capability
-manifest to the `cairn_worker_presence` KV.
+`<name>` is the pool name (`CAIRN_WORKER_NAME`). It publishes
+`cairn.worker.v1.JobResult`, heartbeats its capability manifest to the
+`cairn_worker_presence` KV and declares how Strava is connected (authorize
+endpoint, scopes, credential labels) in the `cairn_worker_manifests` KV, so
+core needs no Strava knowledge of its own.
 
 ## Standalone
 
