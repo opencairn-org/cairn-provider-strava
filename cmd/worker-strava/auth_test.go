@@ -120,6 +120,45 @@ func TestRefresh_Preconditions(t *testing.T) {
 	}
 }
 
+func TestExchange(t *testing.T) {
+	var form url.Values
+	h := tokenServer(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		form, _ = url.ParseQuery(string(body))
+		if form.Get("code") != "good" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"message":"Bad Request","errors":[{"resource":"AuthorizationCode","field":"code","code":"invalid"}]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"token_type":"Bearer","access_token":"at","refresh_token":"rt","expires_at":1900000000,"scope":"read,activity:read_all","athlete":{"id":4242}}`)
+	})
+	req := workersdk.OAuthExchangeRequest{ConnectionID: "c1", ClientID: "id", ClientSecret: "secret", Code: "good", RedirectURI: "https://cairn.test/cb"}
+	got := h.Exchange(context.Background(), req)
+	if got.Error != "" || got.AccessToken != "at" || got.RefreshToken != "rt" || got.ProviderAccountID != "4242" ||
+		got.Scope != "read,activity:read_all" || got.TokenType != "Bearer" || got.ExpiresAt.Unix() != 1900000000 {
+		t.Errorf("reply = %+v", got)
+	}
+	if form.Get("grant_type") != "authorization_code" || form.Get("code") != "good" || form.Get("client_secret") != "secret" || form.Get("redirect_uri") != "https://cairn.test/cb" {
+		t.Errorf("form = %v", form)
+	}
+	req.Code = "bad"
+	if got = h.Exchange(context.Background(), req); got.Error != "exchange_failed" || got.Message != "invalid_grant" || got.AccessToken != "" {
+		t.Errorf("rejected = %+v", got)
+	}
+	if got = h.Exchange(context.Background(), workersdk.OAuthExchangeRequest{Code: "good"}); got.Error != "bad_request" {
+		t.Errorf("missing creds = %+v", got)
+	}
+	h.tokenURL = "http://127.0.0.1:1"
+	req.Code = "good"
+	if got = h.Exchange(context.Background(), req); got.Error != "transient" {
+		t.Errorf("network error = %+v", got)
+	}
+	empty := tokenServer(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, `{}`) })
+	if got = empty.Exchange(context.Background(), req); got.Error != "exchange_failed" {
+		t.Errorf("empty token response = %+v", got)
+	}
+}
+
 func TestNewStravaAuthHandler_DefaultURL(t *testing.T) {
 	t.Setenv("CAIRN_STRAVA_TOKEN_URL", "")
 	if h := NewStravaAuthHandler(); h.tokenURL != "https://www.strava.com/oauth/token" {

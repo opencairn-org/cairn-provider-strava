@@ -6,6 +6,25 @@ to follow [Semantic Versioning](https://semver.org/). Dates are ISO-8601.
 
 ## [Unreleased]
 
+Contract change: needs cairn-core 0.7 (docs/adr/0005).
+
+### Added
+- The manifest declares how Strava is connected (`provider_meta`: display
+  name, authorize endpoint, scopes, `approval_prompt=force`, credential
+  labels, activity link, setup docs); core builds the connect flow from it.
+- The pool answers core's authorization-code exchange on
+  `cairn.oauth.strava.<name>.exchange` (`StravaAuthHandler.Exchange`); the
+  reply carries the tokens and the athlete id.
+
+### Removed
+- The pre-0.5 drain of `cairn.jobs.<job>.strava`; core 0.7 no longer grants
+  those subjects (`HandleLegacy` is gone from the SDK).
+
+### Changed
+- Core 0.7 scopes `cairn.tokens.strava.*` and the presign subjects to the
+  account's/blob's provider and checks blob keys; no change needed here, the
+  worker already stays within its own keys.
+
 ## [0.6.0] — 2026-10-29
 
 Released alongside cairn-core 0.6.0. The worker contract (`cairn.worker.v1`)

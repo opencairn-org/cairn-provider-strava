@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -93,42 +94,97 @@ func (h *StravaAuthHandler) Refresh(
 	form.Set("grant_type", "refresh_token")
 	form.Set("refresh_token", current.RefreshToken)
 
+	body, err := h.tokenRequest(ctx, form, "refresh")
+	if err != nil {
+		return port.TokenState{}, err
+	}
+	return parseStravaRefreshResponse(body, current)
+}
+
+// tokenRequest posts the form to the token endpoint and classifies the
+// answer: the body on 200, a *port.TerminalError on a 400/401 rejection
+// (user must re-authorize, or the app is misconfigured), a plain error for
+// everything retryable.
+func (h *StravaAuthHandler) tokenRequest(ctx context.Context, form url.Values, op string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", h.tokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return port.TokenState{}, fmt.Errorf("build refresh request: %w", err)
+		return nil, fmt.Errorf("build %s request: %w", op, err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := h.http.Do(req)
 	if err != nil {
-		return port.TokenState{}, fmt.Errorf("strava refresh HTTP: %w", err)
+		return nil, fmt.Errorf("strava %s HTTP: %w", op, err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 
 	switch {
 	case resp.StatusCode == 200:
-		return parseStravaRefreshResponse(body, current)
+		return body, nil
 
 	case resp.StatusCode == 400 || resp.StatusCode == 401:
 		// Strava's 400 body contains:
 		//   {"message":"Bad Request","errors":[{"resource":"RefreshToken","field":"refresh_token","code":"invalid"}]}
-		reason := classifyStravaError(body)
-		return port.TokenState{}, &port.TerminalError{
-			Reason: reason,
-			Cause:  fmt.Errorf("strava refresh %d: %s", resp.StatusCode, truncate(body, 200)),
+		return nil, &port.TerminalError{
+			Reason: classifyStravaError(body),
+			Cause:  fmt.Errorf("strava %s %d: %s", op, resp.StatusCode, truncate(body, 200)),
 		}
 
 	case resp.StatusCode == 429:
-		return port.TokenState{}, fmt.Errorf("strava refresh rate-limited (429): %s", truncate(body, 100))
+		return nil, fmt.Errorf("strava %s rate-limited (429): %s", op, truncate(body, 100))
 
 	case resp.StatusCode >= 500:
-		return port.TokenState{}, fmt.Errorf("strava refresh server error %d: %s", resp.StatusCode, truncate(body, 100))
+		return nil, fmt.Errorf("strava %s server error %d: %s", op, resp.StatusCode, truncate(body, 100))
 
 	default:
-		return port.TokenState{}, fmt.Errorf("strava refresh unexpected %d: %s", resp.StatusCode, truncate(body, 200))
+		return nil, fmt.Errorf("strava %s unexpected %d: %s", op, resp.StatusCode, truncate(body, 200))
 	}
+}
+
+// Exchange trades the connect flow's authorization code for tokens; core
+// asks this pool on cairn.oauth.strava.<name>.exchange with the connection's
+// app credentials. Strava names the athlete in the reply, which becomes the
+// provider account id.
+func (h *StravaAuthHandler) Exchange(ctx context.Context, req workersdk.OAuthExchangeRequest) workersdk.OAuthExchangeReply {
+	if req.ClientID == "" || req.ClientSecret == "" || req.Code == "" {
+		return workersdk.OAuthExchangeReply{Error: "bad_request", Message: "client_id, client_secret and code are required"}
+	}
+	form := url.Values{}
+	form.Set("client_id", req.ClientID)
+	form.Set("client_secret", req.ClientSecret)
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", req.Code)
+	if req.RedirectURI != "" {
+		form.Set("redirect_uri", req.RedirectURI)
+	}
+	body, err := h.tokenRequest(ctx, form, "exchange")
+	if err != nil {
+		var term *port.TerminalError
+		if errors.As(err, &term) {
+			return workersdk.OAuthExchangeReply{Error: "exchange_failed", Message: term.Reason}
+		}
+		return workersdk.OAuthExchangeReply{Error: "transient", Message: err.Error()}
+	}
+	var r struct {
+		Scope   string `json:"scope"`
+		Athlete struct {
+			ID int64 `json:"id"`
+		} `json:"athlete"`
+	}
+	state, perr := parseStravaRefreshResponse(body, port.TokenState{})
+	if perr != nil || json.Unmarshal(body, &r) != nil {
+		return workersdk.OAuthExchangeReply{Error: "exchange_failed", Message: "token response without access_token"}
+	}
+	reply := workersdk.OAuthExchangeReply{
+		AccessToken: state.AccessToken, RefreshToken: state.RefreshToken, ExpiresAt: state.ExpiresAt,
+		Scope: r.Scope, TokenType: state.TokenType,
+	}
+	if r.Athlete.ID != 0 {
+		reply.ProviderAccountID = strconv.FormatInt(r.Athlete.ID, 10)
+	}
+	return reply
 }
 
 // stravaRefreshResponse is the JSON shape Strava returns on a successful
