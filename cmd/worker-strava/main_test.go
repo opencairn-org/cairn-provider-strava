@@ -244,3 +244,35 @@ func TestRateBucket_PerApp(t *testing.T) {
 		t.Fatal("appFor")
 	}
 }
+
+func TestBaseURLOverrides(t *testing.T) {
+	t.Setenv("CAIRN_STRAVA_API_BASE_URL", "")
+	t.Setenv("CAIRN_STRAVA_OAUTH_BASE_URL", "")
+	t.Setenv("CAIRN_STRAVA_TOKEN_URL", "")
+	if got := newStravaClient().baseURL; got != defaultStravaAPIBaseURL {
+		t.Errorf("default api base = %q", got)
+	}
+	if got := NewStravaAuthHandler().tokenURL; got != "https://www.strava.com/oauth/token" {
+		t.Errorf("default token url = %q", got)
+	}
+	if got := stravaProviderMeta().OAuth.AuthorizeURL; got != "https://www.strava.com/oauth/authorize" {
+		t.Errorf("default authorize url = %q", got)
+	}
+
+	t.Setenv("CAIRN_STRAVA_API_BASE_URL", "http://mock:1/api/v3/")
+	t.Setenv("CAIRN_STRAVA_OAUTH_BASE_URL", "http://mock:1/oauth/")
+	if got := newStravaClient().baseURL; got != "http://mock:1/api/v3" {
+		t.Errorf("api base = %q", got)
+	}
+	if got := NewStravaAuthHandler().tokenURL; got != "http://mock:1/oauth/token" {
+		t.Errorf("token url = %q", got)
+	}
+	if got := stravaProviderMeta().OAuth.AuthorizeURL; got != "http://mock:1/oauth/authorize" {
+		t.Errorf("authorize url = %q", got)
+	}
+	// The token endpoint override keeps precedence over the OAuth base.
+	t.Setenv("CAIRN_STRAVA_TOKEN_URL", "http://other:2/token")
+	if got := NewStravaAuthHandler().tokenURL; got != "http://other:2/token" {
+		t.Errorf("token url precedence = %q", got)
+	}
+}

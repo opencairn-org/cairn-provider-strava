@@ -6,6 +6,15 @@ to follow [Semantic Versioning](https://semver.org/). Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Added
+- `CAIRN_STRAVA_API_BASE_URL` and `CAIRN_STRAVA_OAUTH_BASE_URL` point the API
+  client and the authorize/token endpoints at a stand-in (mock, e2e runs);
+  `CAIRN_STRAVA_TOKEN_URL` keeps precedence for the token endpoint alone.
+- `cmd/mock-strava` (`internal/mockstrava`): a standalone mock Strava for
+  end-to-end runs — auto-approving OAuth with refresh, seeded rides with
+  laps, streams and gear, Strava-shaped rate-limit headers, and a `/_mock/*`
+  control API (add activities, emit webhooks, inject 429s, stats).
+
 ### Changed
 - The worker is built on
   [cairn-provider-sdk-go](https://github.com/opencairn-org/cairn-provider-sdk-go):

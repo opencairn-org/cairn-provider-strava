@@ -55,6 +55,19 @@ export CAIRN_WORKER_ENROLLMENT_TOKEN=...   # from POST /admin/worker-enrollments
 go run ./cmd/worker-strava
 ```
 
+Against a mock Strava (`cmd/mock-strava`, or the SDK's e2e harness) point the
+worker at it instead of strava.com:
+
+```bash
+go run ./cmd/mock-strava --listen 127.0.0.1:8099 &
+export CAIRN_STRAVA_API_BASE_URL=http://127.0.0.1:8099/api/v3
+export CAIRN_STRAVA_OAUTH_BASE_URL=http://127.0.0.1:8099/oauth   # authorize + token
+```
+
+`CAIRN_STRAVA_TOKEN_URL` still overrides the token endpoint alone. The mock
+auto-approves the authorize round-trip, serves seeded rides (laps, streams,
+gear) and takes test directions on `/_mock/*` (`--help` lists the flags).
+
 ## Versioning
 
 Three versions, defined in [core ADR 0005](https://github.com/opencairn-org/cairn-core/blob/main/docs/adr/0005-provider-versioning.md)
