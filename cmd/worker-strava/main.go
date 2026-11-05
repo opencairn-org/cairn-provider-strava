@@ -17,6 +17,9 @@
 //	CAIRN_WORKER_INSTANCE_ID             optional stable id per instance
 //	CAIRN_STRAVA_WEBHOOK_VERIFY_TOKEN    set on exactly one instance
 //	CAIRN_LOG_LEVEL                      debug|info|warn|error (default info)
+//	CAIRN_STRAVA_API_BASE_URL            Strava API (default https://www.strava.com/api/v3; mocks/e2e)
+//	CAIRN_STRAVA_OAUTH_BASE_URL          authorize + token endpoints (default https://www.strava.com/oauth)
+//	CAIRN_STRAVA_TOKEN_URL               token endpoint alone, overrides the OAuth base
 //
 // Worker version + package are compile-time constants (workerVersion /
 // workerPackage) — they define the worker's schema, so they are not env-driven.
@@ -28,6 +31,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -66,7 +70,7 @@ func stravaProviderMeta() *workersdk.ProviderMeta {
 		SetupDocsURL:        "https://docs.opencairn.org/self-host/providers/strava",
 		AuthMethod:          workersdk.AuthMethodOAuth2,
 		OAuth: &workersdk.ProviderOAuth{
-			AuthorizeURL:   "https://www.strava.com/oauth/authorize",
+			AuthorizeURL:   stravaOAuthBaseURL() + "/authorize",
 			Scopes:         []string{"read", "activity:read_all"},
 			ScopeSeparator: ",",
 			// Always show Strava's consent screen, so a user can pick a
@@ -78,6 +82,22 @@ func stravaProviderMeta() *workersdk.ProviderMeta {
 			{Key: "client_secret", Label: "Client secret", Secret: true},
 		},
 	}
+}
+
+// Strava's endpoints, overridable so a mock can stand in (e2e runs).
+const (
+	defaultStravaAPIBaseURL   = "https://www.strava.com/api/v3"
+	defaultStravaOAuthBaseURL = "https://www.strava.com/oauth"
+)
+
+// stravaAPIBaseURL is the REST base (CAIRN_STRAVA_API_BASE_URL).
+func stravaAPIBaseURL() string {
+	return strings.TrimRight(workersdk.EnvOr("CAIRN_STRAVA_API_BASE_URL", defaultStravaAPIBaseURL), "/")
+}
+
+// stravaOAuthBaseURL is the authorize/token base (CAIRN_STRAVA_OAUTH_BASE_URL).
+func stravaOAuthBaseURL() string {
+	return strings.TrimRight(workersdk.EnvOr("CAIRN_STRAVA_OAUTH_BASE_URL", defaultStravaOAuthBaseURL), "/")
 }
 
 const (

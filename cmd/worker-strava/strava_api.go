@@ -38,8 +38,6 @@ import (
 // response body for diagnostics.
 // ---------------------------------------------------------------------------
 
-const defaultStravaBaseURL = "https://www.strava.com/api/v3"
-
 type stravaClient struct {
 	baseURL    string
 	httpClient *http.Client
@@ -57,7 +55,7 @@ type stravaClient struct {
 
 func newStravaClient() *stravaClient {
 	return &stravaClient{
-		baseURL: defaultStravaBaseURL,
+		baseURL: stravaAPIBaseURL(),
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
