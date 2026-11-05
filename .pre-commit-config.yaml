@@ -3,8 +3,6 @@
 default_install_hook_types: [pre-commit, commit-msg, pre-push]
 default_stages: [pre-commit]
 fail_fast: false
-# Generated proto stubs are synced from cairn-core as they are.
-exclude: ^proto/
 
 repos:
   # Hygiene (prek built-ins, offline)

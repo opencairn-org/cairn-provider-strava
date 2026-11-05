@@ -28,9 +28,6 @@ linters:
         - (io.Closer).Close
   exclusions:
     generated: strict
-    paths:
-      # protoc-generated stubs synced from cairn-core (scripts/sync-proto.sh)
-      - ^proto/
     rules:
       # Tests use fixed tokens, fake servers and table-driven bodies by design.
       - path: _test\.go

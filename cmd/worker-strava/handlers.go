@@ -6,135 +6,24 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	natsadapter "github.com/opencairn-org/cairn-provider-strava/internal/nats"
-	"github.com/opencairn-org/cairn-provider-strava/internal/port"
-	"github.com/opencairn-org/cairn-provider-strava/internal/workersdk"
-	workerv1 "github.com/opencairn-org/cairn-provider-strava/proto/cairn/worker/v1"
+	"github.com/opencairn-org/cairn-provider-sdk-go/natsbus"
+	"github.com/opencairn-org/cairn-provider-sdk-go/port"
+	workerv1 "github.com/opencairn-org/cairn-provider-sdk-go/proto/cairn/worker/v1"
+	"github.com/opencairn-org/cairn-provider-sdk-go/workersdk"
 )
 
-// ---------------------------------------------------------------------------
-// Config (ENV-driven)
-// ---------------------------------------------------------------------------
+// workerConfig is the environment the SDK reads (CAIRN_*); loadConfig
+// adds nothing Strava-specific.
+type workerConfig = workersdk.EnvConfig
 
-type workerConfig struct {
-	NATSURL         string
-	EnrollmentToken string
-	NATSUser        string
-	NATSPassword    string
-	WorkerName      string // optional override; defaults to workerName const
-	InstanceID      string
-	LogLevel        slog.Level
-}
-
-// loadConfig reads the worker's environment. The only value that can be
-// malformed is CAIRN_LOG_LEVEL (debug|info|warn|error, default info).
-func loadConfig() (workerConfig, error) {
-	cfg := workerConfig{
-		NATSURL:         envOr("CAIRN_NATS_URL", "nats://localhost:4222"),
-		EnrollmentToken: os.Getenv("CAIRN_WORKER_ENROLLMENT_TOKEN"),
-		NATSUser:        os.Getenv("CAIRN_NATS_USER"),
-		NATSPassword:    os.Getenv("CAIRN_NATS_PASSWORD"),
-		WorkerName:      envOr("CAIRN_WORKER_NAME", workerName),
-		InstanceID:      envOr("CAIRN_WORKER_INSTANCE_ID", hostnameOr("strava-worker")),
-	}
-	if err := cfg.LogLevel.UnmarshalText([]byte(envOr("CAIRN_LOG_LEVEL", "info"))); err != nil {
-		return workerConfig{}, fmt.Errorf("CAIRN_LOG_LEVEL: %w", err)
-	}
-	// An enrollment token is the production path (NATS auth-callout mints a
-	// scoped user-JWT — see cairn-core docs/architecture.md §4.5). For
-	// local/dev stacks where NATS runs without auth-callout configured, the
-	// token may be omitted: the worker then connects anonymously or with
-	// static user/password creds (CAIRN_NATS_USER / CAIRN_NATS_PASSWORD).
-	// This is the only difference between dev and prod worker bring-up.
-	return cfg, nil
-}
-
-func envOr(k, fallback string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return fallback
-}
-
-func hostnameOr(fallback string) string {
-	if h, err := os.Hostname(); err == nil && h != "" {
-		return h
-	}
-	return fallback
-}
-
-// ---------------------------------------------------------------------------
-// NATS connection via enrollment-token
-//
-// The worker presents only its enrollment token on CONNECT. NATS's
-// auth-callout subscriber admits the connection by minting a user-JWT,
-// scoped to the worker's permissions, for the user nkey nats-server
-// assigns the connection. Restart = new enrollment-callout. (If the
-// enrollment was single-use, restart fails admission; the operator
-// generates a new token.)
-// ---------------------------------------------------------------------------
-
-func connectBus(cfg workerConfig, logger *slog.Logger) (*natsadapter.Bus, error) {
-	opts := []nats.Option{
-		nats.Name(cfg.WorkerName),
-		nats.Timeout(10 * time.Second),
-		nats.MaxReconnects(-1),
-		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
-			logger.Warn("nats disconnect", "error", err)
-		}),
-		nats.ReconnectHandler(func(c *nats.Conn) {
-			logger.Info("nats reconnected", "url", c.ConnectedUrl())
-		}),
-	}
-
-	switch {
-	case cfg.EnrollmentToken != "":
-		// Production path: core's auth-callout binds the JWT to the server-assigned user nkey.
-		logger.Info("strava worker: connecting to NATS (enrollment-token auth-callout)",
-			"url", cfg.NATSURL,
-			"worker_name", cfg.WorkerName,
-		)
-		opts = append(opts, nats.Token(cfg.EnrollmentToken))
-
-	default:
-		// Dev path: no enrollment token. Connect anonymously, or with static
-		// user/password creds when CAIRN_NATS_USER/PASSWORD are set. Requires
-		// a NATS that doesn't enforce auth-callout (the local dev stack runs
-		// NATS without it). NOT for production — there's no per-worker
-		// permission scoping on this path.
-		logger.Warn("strava worker: connecting to NATS WITHOUT enrollment token (dev mode — no permission scoping)",
-			"url", cfg.NATSURL,
-			"worker_name", cfg.WorkerName,
-			"static_user", cfg.NATSUser != "",
-		)
-		if cfg.NATSUser != "" {
-			opts = append(opts, nats.UserInfo(cfg.NATSUser, cfg.NATSPassword))
-		}
-	}
-
-	nc, err := nats.Connect(cfg.NATSURL, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("nats connect: %w", err)
-	}
-
-	// Wrap the connection in our Bus adapter. Workers don't declare
-	// streams; the server does.
-	bus, err := natsadapter.NewBusFromConn(nc, cfg.WorkerName+":"+cfg.InstanceID, logger)
-	if err != nil {
-		nc.Close()
-		return nil, fmt.Errorf("wrap into Bus: %w", err)
-	}
-	return bus, nil
-}
+func loadConfig() (workerConfig, error) { return workersdk.LoadEnv(workerName) }
 
 // ---------------------------------------------------------------------------
 // Rate limiter
@@ -143,23 +32,15 @@ func connectBus(cfg workerConfig, logger *slog.Logger) (*natsadapter.Bus, error)
 // newRateLimiter returns nil (no local limiting) when the shared KV bucket
 // is unreachable, so a missing bucket degrades to relying on upstream 429s.
 func newRateLimiter(bus port.JobBus, logger *slog.Logger) port.RateLimiter {
-	kv, err := bus.KV("cairn_rate_limits")
-	if err != nil {
-		// Server hasn't bootstrapped the bucket yet, or the worker lacks
-		// permissions. The upstream 429 path still reacts via
-		// ObserveRateLimit429, but nothing throttles proactively.
-		logger.Warn("rate-limit KV bucket unavailable; running without local rate limiting", "error", err)
-		return nil
-	}
-	return natsadapter.NewRateLimiter(kv, map[string]int{
+	return workersdk.NewRateLimiter(bus, logger, map[string]natsbus.Limit{
 		// Fallback guesses only: Strava's default READ limits for
 		// non-approved apps. The authoritative values come from the
 		// X-ReadRateLimit-* headers via SyncUsage on every API response.
 		// Keyed per pool: per-app buckets are learned from the first usage
-		// headers of each app.
-		rateBucket("", "short"):   100,
-		rateBucket("", "daily"):   1000,
-		rateBucket("", "webhook"): 20,
+		// headers of each app. Windows follow the bucket suffix (15 min / day).
+		rateBucket("", "short"):   {Capacity: 100},
+		rateBucket("", "daily"):   {Capacity: 1000},
+		rateBucket("", "webhook"): {Capacity: 20},
 	})
 }
 
@@ -186,50 +67,26 @@ func newRateLimiter(bus port.JobBus, logger *slog.Logger) port.RateLimiter {
 // Core summarizes, lets the user choose, and fills the persisted import queue.
 // ---------------------------------------------------------------------------
 
-type discoverRequest struct {
-	AccountID string `json:"account_id"`
-	// StartPage lets the server drive paged, resumable discovery: it calls
-	// repeatedly, advancing StartPage to the response's NextPage, until the
-	// response is Complete. 0/1 = start from the first page.
-	StartPage int `json:"start_page,omitempty"`
-}
-
-type discoverItem struct {
-	ItemType   string `json:"item_type"`
-	ExternalID string `json:"external_id"`
-	ItemTime   string `json:"item_time"` // RFC3339
-}
-
-type discoverResponse struct {
-	Items []discoverItem `json:"items"`
-	// Complete is true once the LAST page (a 0-item page) has been reached — the
-	// only correct end-of-data signal. A short (<200) page is NOT the end.
-	Complete bool `json:"complete"`
-	// NextPage is the page the server should request next when !Complete.
-	NextPage int `json:"next_page,omitempty"`
-	// RateLimited tells the server this batch stopped because the provider
-	// budget is exhausted — it should wait for the window to refill before
-	// requesting NextPage.
-	RateLimited bool   `json:"rate_limited,omitempty"`
-	Error       string `json:"error,omitempty"`
-}
+// The wire shapes are the SDK's; Complete is true only once the LAST page
+// (a 0-item page) has been reached — a short (<200) page is NOT the end on
+// Strava.
+type (
+	discoverItem     = workersdk.DiscoverItem
+	discoverResponse = workersdk.DiscoverResponse
+)
 
 // discoverMaxPagesPerCall bounds how many pages one request/reply walks, so a
 // single call stays well under the NATS request timeout. The server stitches
 // calls together via NextPage.
 const discoverMaxPagesPerCall = 25
 
-func makeDiscoverHandler(w *workersdk.Worker, client *stravaClient) port.RequestHandler {
-	return func(ctx context.Context, body []byte) ([]byte, error) {
-		var req discoverRequest
-		if err := json.Unmarshal(body, &req); err != nil {
-			return json.Marshal(discoverResponse{Error: "bad_request"})
-		}
+func makeDiscoverHandler(w *workersdk.Worker, client *stravaClient) workersdk.DiscoverFunc {
+	return func(ctx context.Context, req workersdk.DiscoverRequest) discoverResponse {
 		token, err := fetchToken(ctx, w, req.AccountID)
 		if err != nil {
-			return json.Marshal(discoverResponse{Error: err.Error()})
+			return discoverResponse{Error: err.Error()}
 		}
-		return json.Marshal(discoverPages(ctx, w, client, token.AccessToken, max(req.StartPage, 1)))
+		return discoverPages(ctx, w, client, token.AccessToken, max(req.StartPage, 1))
 	}
 }
 
@@ -291,15 +148,7 @@ func discoverReserveFailed(items []discoverItem, page int, err error) discoverRe
 // fetch_source.strava: pull one activity + its streams, publish result
 // ---------------------------------------------------------------------------
 
-type fetchSourceJob struct {
-	JobID        string `json:"job_id"`
-	AccountID    string `json:"account_id"`
-	UserID       string `json:"user_id"`
-	Provider     string `json:"provider"`
-	ExtID        string `json:"ext_id"`
-	FetchStreams bool   `json:"fetch_streams"`
-	Reason       string `json:"reason"` // "backfill" | "webhook" | "reconcile"
-}
+type fetchSourceJob = workersdk.FetchSourceJob
 
 // reserveRead reserves one read from the provider's DAILY budget and then
 // from the per-window bucket. Every Strava call counts against both real
@@ -342,7 +191,7 @@ func (c *segmentCache) put(id string, s *workerv1.SegmentImport) {
 	c.m[id] = s
 }
 
-func makeFetchSourceHandler(cfg workerConfig, client *stravaClient) func(context.Context, *workersdk.Worker, workersdk.Job) error {
+func makeFetchSourceHandler(client *stravaClient) func(context.Context, *workersdk.Worker, workersdk.Job) error {
 	// Shared across every fetch_source job this handler processes: a segment's
 	// geometry (polyline) is fetched at most once per worker lifetime, since
 	// segments are effectively immutable. Bounds the extra API load.
@@ -359,10 +208,10 @@ func makeFetchSourceHandler(cfg workerConfig, client *stravaClient) func(context
 		// A terminal failure publishes a small failure result first (best-
 		// effort) so the server fails the queue item with the true reason —
 		// Term alone leaves it to the stale reaper's masked "no result".
-		err := fetchSourceOnce(ctx, w, cfg, client, segCache, job, in)
+		err := fetchSourceOnce(ctx, w, client, segCache, job, in)
 		var term *port.TerminalError
 		if errors.As(err, &term) {
-			publishFailureResult(ctx, w, cfg, job, in, term.Reason, term.Cause)
+			publishFailureResult(ctx, w, job, in, term.Reason, term.Cause)
 		}
 		return err
 	}
@@ -370,7 +219,7 @@ func makeFetchSourceHandler(cfg workerConfig, client *stravaClient) func(context
 
 // fetchSourceOnce is one fetch_source attempt: pull the activity (+streams,
 // segments), archive the raw JSON, and publish the claim-checked result.
-func fetchSourceOnce(ctx context.Context, w *workersdk.Worker, cfg workerConfig, client *stravaClient, segCache *segmentCache, job workersdk.Job, in fetchSourceJob) error {
+func fetchSourceOnce(ctx context.Context, w *workersdk.Worker, client *stravaClient, segCache *segmentCache, job workersdk.Job, in fetchSourceJob) error {
 	token, err := fetchToken(ctx, w, in.AccountID)
 	if err != nil {
 		return err // already a TerminalError or NakWithDelay
@@ -387,10 +236,10 @@ func fetchSourceOnce(ctx context.Context, w *workersdk.Worker, cfg workerConfig,
 
 	activity, err := client.GetActivity(ctx, token.AccessToken, in.ExtID)
 	if err != nil {
-		return mapStravaErr(ctx, w, cfg, job, in, err, "fetch_activity")
+		return mapStravaErr(ctx, w, job, in, err, "fetch_activity")
 	}
 
-	rawStreams, err := fetchStreams(ctx, w, cfg, client, job, in, token.AccessToken, bucket)
+	rawStreams, err := fetchStreams(ctx, w, client, job, in, token.AccessToken, bucket)
 	if err != nil {
 		return err
 	}
@@ -405,7 +254,7 @@ func fetchSourceOnce(ctx context.Context, w *workersdk.Worker, cfg workerConfig,
 	// re-parsed (or re-downloaded by the user) WITHOUT spending provider API
 	// budget. Best-effort: a failure (no blob store, presign timeout) leaves
 	// raw_blob_id empty — the import is durable regardless.
-	if id, size, aerr := archiveActivityBlob(ctx, w, cfg, in.UserID, activity, rawStreams); aerr != nil {
+	if id, size, aerr := archiveActivityBlob(ctx, w, in.UserID, activity, rawStreams); aerr != nil {
 		w.Logger().Warn("archive activity blob failed", "ext_id", in.ExtID, "error", aerr)
 	} else {
 		imported.RawBlobId, imported.RawContentType, imported.RawSizeBytes = id, "application/json", size
@@ -430,11 +279,11 @@ func fetchSourceOnce(ctx context.Context, w *workersdk.Worker, cfg workerConfig,
 	// delivery and must not be swallowed by the stream's dedup window
 	// (ingest dedups idempotently).
 	msgID := fmt.Sprintf("result:%s:d%d", in.JobID, job.DeliveryAttempt)
-	if err := publishResultViaBlob(ctx, w, job, msgID, newJobResult(cfg, events...)); err != nil {
+	if err := publishResultViaBlob(ctx, w, job, msgID, newJobResult(w, events...)); err != nil {
 		return err
 	}
 
-	publishSegments(ctx, w, cfg, job, msgID+":seg", segs)
+	publishSegments(ctx, w, job, msgID+":seg", segs)
 
 	// Rate-limited mid-segments: the activity above is durable; retry the
 	// job after the window so the remaining segments complete. Cached
@@ -450,7 +299,7 @@ func fetchSourceOnce(ctx context.Context, w *workersdk.Worker, cfg workerConfig,
 // path skips them by setting FetchStreams=false (the per-activity fetch pulls
 // them on the user's first detail view), and Strava returns 404 when the
 // activity has no GPS or stream data at all.
-func fetchStreams(ctx context.Context, w *workersdk.Worker, cfg workerConfig, client *stravaClient, job workersdk.Job, in fetchSourceJob, accessToken, bucket string) (stravaStreamsResponse, error) {
+func fetchStreams(ctx context.Context, w *workersdk.Worker, client *stravaClient, job workersdk.Job, in fetchSourceJob, accessToken, bucket string) (stravaStreamsResponse, error) {
 	if !in.FetchStreams {
 		return nil, nil
 	}
@@ -462,7 +311,7 @@ func fetchStreams(ctx context.Context, w *workersdk.Worker, cfg workerConfig, cl
 	case errors.Is(err, ErrStravaNotFound):
 		return nil, nil
 	case err != nil:
-		return nil, mapStravaErr(ctx, w, cfg, job, in, err, "fetch_streams")
+		return nil, mapStravaErr(ctx, w, job, in, err, "fetch_streams")
 	}
 	return streams, nil
 }
@@ -491,15 +340,10 @@ func externalRef(in fetchSourceJob, extID string) *workerv1.ExternalRef {
 	}
 }
 
-// newJobResult stamps events with this worker's identity.
-func newJobResult(cfg workerConfig, events ...*workerv1.WorkerEvent) *workerv1.JobResult {
-	return &workerv1.JobResult{
-		WorkerName:    cfg.WorkerName,
-		WorkerVersion: workerVersion,
-		WorkerPackage: workerPackage,
-		WorkerRelease: workerRelease,
-		Events:        events,
-	}
+// newJobResult stamps events with this worker's identity (name, parser
+// version, package and release from the worker's config).
+func newJobResult(w *workersdk.Worker, events ...*workerv1.WorkerEvent) *workerv1.JobResult {
+	return w.NewJobResult(events...)
 }
 
 // segmentBatch is the segments and efforts of one activity, plus how long to
@@ -596,12 +440,12 @@ func resolveSegment(ctx context.Context, w *workersdk.Worker, client *stravaClie
 // resolves each effort's activity by external id, so this message is
 // self-contained. Best-effort: the activity is already durable, and a
 // failed/dropped segment batch is re-emitted on the next import.
-func publishSegments(ctx context.Context, w *workersdk.Worker, cfg workerConfig, job workersdk.Job, msgID string, segs segmentBatch) {
+func publishSegments(ctx context.Context, w *workersdk.Worker, job workersdk.Job, msgID string, segs segmentBatch) {
 	if len(segs.segments) == 0 {
 		return
 	}
 	events := append(segs.segments, segs.efforts...)
-	if err := publishResultViaBlob(ctx, w, job, msgID, newJobResult(cfg, events...)); err != nil {
+	if err := publishResultViaBlob(ctx, w, job, msgID, newJobResult(w, events...)); err != nil {
 		w.Logger().Warn("segment result publish failed", "error", err)
 		return
 	}
@@ -611,7 +455,7 @@ func publishSegments(ctx context.Context, w *workersdk.Worker, cfg workerConfig,
 // mapStravaErr translates a Strava-client error into the workersdk
 // error flavor. Centralised here so every handler that hits the API
 // shares the same routing semantics.
-func mapStravaErr(ctx context.Context, w *workersdk.Worker, cfg workerConfig, job workersdk.Job, in fetchSourceJob, err error, op string) error {
+func mapStravaErr(ctx context.Context, w *workersdk.Worker, job workersdk.Job, in fetchSourceJob, err error, op string) error {
 	switch {
 	case errors.Is(err, ErrStravaUnauthorized):
 		// Token is invalid. The next attempt with a fresh token will
@@ -633,7 +477,7 @@ func mapStravaErr(ctx context.Context, w *workersdk.Worker, cfg workerConfig, jo
 		})
 		msgID := "deleted:" + workerProvider + ":" + in.ExtID
 		_ = w.PublishEvent(ctx, "source.deleted_upstream", msgID, evt)
-		publishFailureResult(ctx, w, cfg, job, in, "not_found", err)
+		publishFailureResult(ctx, w, job, in, "not_found", err)
 		return nil
 
 	default:
@@ -642,7 +486,7 @@ func mapStravaErr(ctx context.Context, w *workersdk.Worker, cfg workerConfig, jo
 		var ue *stravaUnexpectedError
 		if errors.As(err, &ue) && ue.Status >= 400 && ue.Status < 500 {
 			reason := fmt.Sprintf("strava_%d", ue.Status)
-			publishFailureResult(ctx, w, cfg, job, in, reason, err)
+			publishFailureResult(ctx, w, job, in, reason, err)
 			return &port.TerminalError{Reason: reason, Cause: fmt.Errorf("strava %s: %w", op, err)}
 		}
 		var rl *StravaRateLimitError
@@ -680,22 +524,7 @@ func observe429(ctx context.Context, w *workersdk.Worker, rl *StravaRateLimitErr
 // parse_blob.strava: re-parse a stored blob with the current worker logic
 // ---------------------------------------------------------------------------
 
-type parseBlobJob struct {
-	JobID     string `json:"job_id"`
-	SourceID  string `json:"source_id"`
-	UserID    string `json:"user_id"`
-	Provider  string `json:"provider"`
-	AccountID string `json:"account_id"` // external_account_id for the rebuilt ref
-	ExtID     string `json:"ext_id"`     // provider activity id for the rebuilt ref
-	// MinParserVersion is the source's current parser version; an older
-	// parser must not re-parse it (ADR 0005).
-	MinParserVersion string `json:"min_parser_version"`
-	Blob             struct {
-		URL            string    `json:"url"`
-		ExpiresAt      time.Time `json:"expires_at"`
-		FallbackHandle string    `json:"fallback_handle"` // raw_blob_id (full S3 key) for re-presign
-	} `json:"blob"`
-}
+type parseBlobJob = workersdk.ParseBlobJob
 
 // makeParseBlobHandler re-parses an archived activity blob with the CURRENT
 // worker mapping logic — no provider API call. It downloads the
@@ -705,25 +534,24 @@ type parseBlobJob struct {
 //
 // This is the quota-free reimport path: a worker logic/mapping change can be
 // applied to historical activities without re-downloading from the provider.
-func makeParseBlobHandler(cfg workerConfig) func(context.Context, *workersdk.Worker, workersdk.Job) error {
+func makeParseBlobHandler() func(context.Context, *workersdk.Worker, workersdk.Job) error {
 	return func(ctx context.Context, w *workersdk.Worker, job workersdk.Job) error {
 		var in parseBlobJob
 		if err := json.Unmarshal(job.Body, &in); err != nil {
 			return &port.TerminalError{Reason: "bad_payload", Cause: err}
 		}
 		// Rolling upgrade: leave it to a newer instance of the pool, backing
-		// off; after parserTooOldAttempts core is told and keeps the source
+		// off; after ParserTooOldAttempts core is told and keeps the source
 		// flagged for a later re-parse.
-		if !workersdk.ParserAllows(workerVersion, in.MinParserVersion) {
-			cause := fmt.Errorf("source parsed by %s, this parser is %s", in.MinParserVersion, workerVersion)
-			if job.DeliveryAttempt >= parserTooOldAttempts {
-				publishFailureResult(ctx, w, cfg, job, fetchSourceJob{UserID: in.UserID, AccountID: in.AccountID, ExtID: in.ExtID}, "parser_too_old", cause)
-				return &port.TerminalError{Reason: "parser_too_old", Cause: cause}
+		if err := w.CheckParserVersion(job, in.MinParserVersion); err != nil {
+			var term *port.TerminalError
+			if errors.As(err, &term) {
+				publishFailureResult(ctx, w, job, fetchSourceJob{UserID: in.UserID, AccountID: in.AccountID, ExtID: in.ExtID}, term.Reason, term.Cause)
 			}
-			return &port.NakWithDelayError{Reason: "parser_too_old", Delay: parserTooOldBackoff(job.DeliveryAttempt), Cause: cause}
+			return err
 		}
 
-		url, err := blobDownloadURL(ctx, w, in)
+		url, err := w.BlobDownloadURL(ctx, in.Blob)
 		if err != nil {
 			return err
 		}
@@ -738,7 +566,7 @@ func makeParseBlobHandler(cfg workerConfig) func(context.Context, *workersdk.Wor
 
 		ref := fetchSourceJob{UserID: in.UserID, AccountID: in.AccountID}
 		events := parseArchive(ref, in.ExtID, in.Blob.FallbackHandle, arch)
-		return publishResultViaBlob(ctx, w, job, "result:"+in.JobID, newJobResult(cfg, events...))
+		return publishResultViaBlob(ctx, w, job, "result:"+in.JobID, newJobResult(w, events...))
 	}
 }
 
@@ -759,34 +587,8 @@ func parseArchive(ref fetchSourceJob, extID, blobID string, arch archivedActivit
 }
 
 // parserTooOldAttempts bounds how long an old instance keeps handing a
-// re-parse back (about 35 minutes with parserTooOldBackoff).
-const parserTooOldAttempts = 10
-
-func parserTooOldBackoff(attempt int) time.Duration {
-	if attempt > 6 { // 30s·2^5 already exceeds the cap; avoid shifting past it
-		return 10 * time.Minute
-	}
-	return min(30*time.Second<<max(attempt-1, 0), 10*time.Minute)
-}
-
-// blobDownloadURL resolves a usable download URL: it re-presigns from the
-// stored blob key (fallback_handle == raw_blob_id) if none was supplied or it
-// expired.
-func blobDownloadURL(ctx context.Context, w *workersdk.Worker, in parseBlobJob) (string, error) {
-	if in.Blob.URL != "" && (in.Blob.ExpiresAt.IsZero() || !time.Now().After(in.Blob.ExpiresAt)) {
-		return in.Blob.URL, nil
-	}
-	if in.Blob.FallbackHandle == "" {
-		return "", &port.TerminalError{Reason: "no_blob_handle"}
-	}
-	fresh, err := w.PresignDownload(ctx, workersdk.PresignDownloadRequest{
-		BlobID: in.Blob.FallbackHandle,
-	})
-	if err != nil {
-		return "", fmt.Errorf("refresh presign: %w", err) // transient → NAK
-	}
-	return fresh.URL, nil
-}
+// re-parse back (workersdk.CheckParserVersion).
+const parserTooOldAttempts = workersdk.ParserTooOldAttempts
 
 // ---------------------------------------------------------------------------
 // backfill.strava: paginate /athlete/activities, enqueue per-activity jobs
@@ -802,13 +604,13 @@ type backfillJob struct {
 	MaxActivities int        `json:"max_activities,omitempty"`
 }
 
-func makeBackfillHandler(cfg workerConfig, client *stravaClient) func(context.Context, *workersdk.Worker, workersdk.Job) error {
+func makeBackfillHandler(client *stravaClient) func(context.Context, *workersdk.Worker, workersdk.Job) error {
 	return func(ctx context.Context, w *workersdk.Worker, job workersdk.Job) error {
-		return runBackfill(ctx, w, cfg, client, job)
+		return runBackfill(ctx, w, client, job)
 	}
 }
 
-func runBackfill(ctx context.Context, w *workersdk.Worker, cfg workerConfig, client *stravaClient, job workersdk.Job) error {
+func runBackfill(ctx context.Context, w *workersdk.Worker, client *stravaClient, job workersdk.Job) error {
 	var in backfillJob
 	if err := json.Unmarshal(job.Body, &in); err != nil {
 		return &port.TerminalError{Reason: "bad_payload", Cause: err}
@@ -830,13 +632,13 @@ func runBackfill(ctx context.Context, w *workersdk.Worker, cfg workerConfig, cli
 
 	enqueued, err := backfillEnqueue(ctx, w, client, in, token.AccessToken, after, perPage)
 	if err != nil {
-		return listErr(ctx, w, cfg, job, in.AccountID, in.UserID, err, "list_activities")
+		return listErr(ctx, w, job, in.AccountID, in.UserID, err, "list_activities")
 	}
 
 	// Backfill enqueues per-activity fetch_source sub-jobs; the result
 	// itself carries no data events, just the worker stamp.
 	w.Logger().Info("backfill enqueued fetch_source jobs", "account_id", in.AccountID, "enqueued", enqueued)
-	body, err := protojson.Marshal(newJobResult(cfg))
+	body, err := protojson.Marshal(newJobResult(w))
 	if err != nil {
 		return &port.TerminalError{Reason: "marshal_result", Cause: err}
 	}
@@ -892,61 +694,41 @@ func listActivityPages(ctx context.Context, w *workersdk.Worker, client *stravaC
 
 // listErr maps a listActivityPages error: listing failures go through
 // mapStravaErr, everything else is returned as is.
-func listErr(ctx context.Context, w *workersdk.Worker, cfg workerConfig, job workersdk.Job, accountID, userID string, err error, op string) error {
+func listErr(ctx context.Context, w *workersdk.Worker, job workersdk.Job, accountID, userID string, err error, op string) error {
 	var le *activityListError
 	if !errors.As(err, &le) {
 		return err
 	}
-	return mapStravaErr(ctx, w, cfg, job, fetchSourceJob{AccountID: accountID, UserID: userID}, le.err, op)
+	return mapStravaErr(ctx, w, job, fetchSourceJob{AccountID: accountID, UserID: userID}, le.err, op)
 }
 
 // enqueueFetchSource fans out one fetch_source sub-job. The deterministic
 // msg-id collapses duplicate enqueues within JetStream's dedup window.
 func enqueueFetchSource(ctx context.Context, w *workersdk.Worker, jobID, accountID, userID, reason, extID string) error {
-	body, _ := json.Marshal(fetchSourceJob{
-		JobID:        jobID + ":" + extID,
-		AccountID:    accountID,
-		UserID:       userID,
-		Provider:     workerProvider,
-		ExtID:        extID,
-		FetchStreams: true,
-		Reason:       reason,
-	})
-	msgID := reason + ":" + workerProvider + ":" + accountID + ":" + extID
-	return w.Enqueue(ctx, w.JobSubject(jobFetchSource), msgID, body)
+	return w.EnqueueFetchSource(ctx, jobID, accountID, userID, reason, extID)
 }
 
 // ---------------------------------------------------------------------------
 // reconcile.strava: drift-safety + polling sync (see cairn-core docs/architecture.md §6.4)
 // ---------------------------------------------------------------------------
 
-type reconcileJob struct {
-	JobID       string     `json:"job_id"`
-	AccountID   string     `json:"account_id"`
-	UserID      string     `json:"user_id"`
-	Provider    string     `json:"provider"`
-	Watermark   *time.Time `json:"watermark,omitempty"`
-	MaxEnqueue  int        `json:"max_enqueue,omitempty"`
-	KnownExtIDs []string   `json:"known_ext_ids,omitempty"`
-}
+type reconcileJob = workersdk.ReconcileJob
 
 // reconcileLookbackFloor bounds how far back reconcile ever lists, even with
-// no watermark. Full-history backfill is the user-driven import queue's job;
-// reconcile only catches recent new/changed activity, so it can never re-list
-// the whole account.
-const reconcileLookbackFloor = 30 * 24 * time.Hour
+// no watermark (workersdk.ReconcileWindowStart).
+const reconcileLookbackFloor = workersdk.ReconcileLookbackFloor
 
 // defaultReconcileMaxEnqueue caps how many fetch_source sub-jobs one reconcile
 // run enqueues, as a safety valve against a large recent burst.
 const defaultReconcileMaxEnqueue = 500
 
-func makeReconcileHandler(cfg workerConfig, client *stravaClient) func(context.Context, *workersdk.Worker, workersdk.Job) error {
+func makeReconcileHandler(client *stravaClient) func(context.Context, *workersdk.Worker, workersdk.Job) error {
 	return func(ctx context.Context, w *workersdk.Worker, job workersdk.Job) error {
-		return runReconcile(ctx, w, cfg, client, job)
+		return runReconcile(ctx, w, client, job)
 	}
 }
 
-func runReconcile(ctx context.Context, w *workersdk.Worker, cfg workerConfig, client *stravaClient, job workersdk.Job) error {
+func runReconcile(ctx context.Context, w *workersdk.Worker, client *stravaClient, job workersdk.Job) error {
 	var in reconcileJob
 	if err := json.Unmarshal(job.Body, &in); err != nil {
 		return &port.TerminalError{Reason: "bad_payload", Cause: err}
@@ -959,7 +741,7 @@ func runReconcile(ctx context.Context, w *workersdk.Worker, cfg workerConfig, cl
 
 	newImports, highWaterMark, err := reconcileEnqueue(ctx, w, client, in, token.AccessToken)
 	if err != nil {
-		return listErr(ctx, w, cfg, job, in.AccountID, in.UserID, err, "reconcile_list")
+		return listErr(ctx, w, job, in.AccountID, in.UserID, err, "reconcile_list")
 	}
 
 	// Reconcile enqueues fetch_source sub-jobs for missing activities;
@@ -971,7 +753,7 @@ func runReconcile(ctx context.Context, w *workersdk.Worker, cfg workerConfig, cl
 	// is what stops the scheduler from re-polling every tick.
 	w.Logger().Info("reconcile enqueued fetch_source jobs",
 		"account_id", in.AccountID, "new_imports", newImports, "watermark", highWaterMark)
-	result := newJobResult(cfg)
+	result := newJobResult(w)
 	result.NewWatermark = timestamppb.New(highWaterMark)
 	body, err := protojson.Marshal(result)
 	if err != nil {
@@ -1000,7 +782,7 @@ func reconcileEnqueue(ctx context.Context, w *workersdk.Worker, client *stravaCl
 		highWaterMark = *in.Watermark
 	}
 	const perPage = 100
-	after := reconcileWindowStart(in.Watermark, time.Now())
+	after := workersdk.ReconcileWindowStart(in.Watermark, time.Now())
 	err := listActivityPages(ctx, w, client, accessToken, after, perPage, func(summaries []stravaActivitySummary) (bool, error) {
 		for _, s := range summaries {
 			extID := formatActivityID(s.ID)
@@ -1018,20 +800,4 @@ func reconcileEnqueue(ctx context.Context, w *workersdk.Worker, client *stravaCl
 		return newImports < maxEnqueue, nil
 	})
 	return newImports, highWaterMark, err
-}
-
-// reconcileWindowStart returns the listing's `after` bound: the later of
-// (watermark - 1h drift margin) and the lookback floor. The 1h margin
-// re-covers activity Strava emitted just after our last import; the floor
-// guarantees reconcile never tries to backfill ancient history (that's the
-// import queue's job). Result: the window is always bounded to recent
-// activity → no flood.
-func reconcileWindowStart(watermark *time.Time, now time.Time) int64 {
-	windowStart := now.Add(-reconcileLookbackFloor)
-	if watermark != nil {
-		if wm := watermark.Add(-time.Hour); wm.After(windowStart) {
-			windowStart = wm
-		}
-	}
-	return max(windowStart.Unix(), 0)
 }

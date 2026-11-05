@@ -8,7 +8,7 @@
 //	cairn.jobs.reconcile.strava      — pull recent activities, enqueue fetch for missing
 //	cairn.jobs.import_gear.strava    — the athlete's bikes and shoes, retired included
 //
-// Required ENV (defaults in workersdk.Config docs):
+// Required ENV (the CAIRN_* variables of workersdk.LoadEnv, plus):
 //
 //	CAIRN_NATS_URL                       e.g. nats://nats:4222
 //	CAIRN_NATS_USER / CAIRN_NATS_PASSWORD  optional, for authenticated servers
@@ -32,8 +32,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/opencairn-org/cairn-provider-strava/internal/capability"
-	"github.com/opencairn-org/cairn-provider-strava/internal/workersdk"
+	"github.com/opencairn-org/cairn-provider-sdk-go/capability"
+	"github.com/opencairn-org/cairn-provider-sdk-go/workersdk"
 )
 
 // stravaManifest declares Strava's per-data-type capabilities — the schema-
@@ -155,7 +155,7 @@ func main() {
 
 func run(cfg workerConfig, logger *slog.Logger) error {
 	rateBucketPool = cfg.WorkerName
-	bus, err := connectBus(cfg, logger)
+	bus, err := workersdk.Connect(cfg, logger)
 	if err != nil {
 		return fmt.Errorf("connect bus: %w", err)
 	}
@@ -184,13 +184,13 @@ func run(cfg workerConfig, logger *slog.Logger) error {
 	}
 
 	client := newStravaClient()
-	registerHandlers(w, cfg, client, logger)
+	registerHandlers(w, client, logger)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	// Discovery responder (request/reply): the Core asks what's importable.
-	discSub, err := bus.RespondTo(ctx, w.DiscoverSubject(), makeDiscoverHandler(w, client))
+	discSub, err := w.RespondDiscover(ctx, makeDiscoverHandler(w, client))
 	if err != nil {
 		return fmt.Errorf("register discover responder: %w", err)
 	}
@@ -215,7 +215,7 @@ func run(cfg workerConfig, logger *slog.Logger) error {
 
 // registerHandlers wires the usage sync, the job handlers and, when this
 // instance owns the webhook, the webhook handlers.
-func registerHandlers(w *workersdk.Worker, cfg workerConfig, client *stravaClient, logger *slog.Logger) {
+func registerHandlers(w *workersdk.Worker, client *stravaClient, logger *slog.Logger) {
 	// Sync the shared limiter to the budget Strava reports on every response —
 	// authoritative capacities instead of the configured guesses, anchored to
 	// Strava's real reset boundaries (quarter-hour / midnight UTC).
@@ -227,11 +227,11 @@ func registerHandlers(w *workersdk.Worker, cfg workerConfig, client *stravaClien
 		_ = w.ObserveUsage(bg, rateBucket(app, "daily"), usedDaily, limitDaily, nextMidnightUTC(now))
 	}
 	handlers := map[string]workersdk.HandlerFunc{
-		jobFetchSource: makeFetchSourceHandler(cfg, client),
-		jobParseBlob:   makeParseBlobHandler(cfg),
-		jobBackfill:    makeBackfillHandler(cfg, client),
-		jobReconcile:   makeReconcileHandler(cfg, client),
-		jobImportGear:  makeImportGearHandler(cfg, client),
+		jobFetchSource: makeFetchSourceHandler(client),
+		jobParseBlob:   makeParseBlobHandler(),
+		jobBackfill:    makeBackfillHandler(client),
+		jobReconcile:   makeReconcileHandler(client),
+		jobImportGear:  makeImportGearHandler(client),
 	}
 	for job, fn := range handlers {
 		if job == jobParseBlob {

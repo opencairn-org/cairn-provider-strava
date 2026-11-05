@@ -9,8 +9,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/opencairn-org/cairn-provider-strava/internal/port"
-	"github.com/opencairn-org/cairn-provider-strava/internal/workersdk"
+	"github.com/opencairn-org/cairn-provider-sdk-go/port"
+	"github.com/opencairn-org/cairn-provider-sdk-go/workersdk"
 )
 
 // ---------------------------------------------------------------------------
@@ -29,12 +29,8 @@ import (
 // ---------------------------------------------------------------------------
 
 // stravaWebhookEnvelope is what the cairn-server's webhook forwarder
-// publishes for every POST /webhooks/strava.
-type stravaWebhookEnvelope struct {
-	Provider string            `json:"provider"`
-	Headers  map[string]string `json:"headers"`
-	Body     []byte            `json:"body"`
-}
+// publishes for every POST /webhooks/strava (workersdk.WebhookEnvelope).
+type stravaWebhookEnvelope = workersdk.WebhookEnvelope
 
 // stravaEvent matches Strava's documented webhook payload:
 // https://developers.strava.com/docs/webhooks/#event-data
@@ -52,9 +48,9 @@ type stravaEvent struct {
 // Decodes the envelope+body, decides on the right downstream job/event
 // based on aspect_type, and publishes via w.Enqueue.
 func handleWebhookEvent(ctx context.Context, w *workersdk.Worker, ev workersdk.WebhookEvent) error {
-	var env stravaWebhookEnvelope
-	if err := json.Unmarshal(ev.Body, &env); err != nil {
-		return &port.TerminalError{Reason: "bad_envelope", Cause: err}
+	env, err := ev.Envelope()
+	if err != nil {
+		return err // bad_envelope, terminal
 	}
 
 	var sev stravaEvent

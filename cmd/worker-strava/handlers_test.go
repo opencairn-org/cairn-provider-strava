@@ -14,11 +14,11 @@ import (
 
 	"google.golang.org/protobuf/encoding/protojson"
 
-	"github.com/opencairn-org/cairn-provider-strava/internal/inmem"
-	"github.com/opencairn-org/cairn-provider-strava/internal/port"
-	"github.com/opencairn-org/cairn-provider-strava/internal/workersdk"
-	cairnv1 "github.com/opencairn-org/cairn-provider-strava/proto/cairn/v1"
-	workerv1 "github.com/opencairn-org/cairn-provider-strava/proto/cairn/worker/v1"
+	"github.com/opencairn-org/cairn-provider-sdk-go/inmem"
+	"github.com/opencairn-org/cairn-provider-sdk-go/port"
+	cairnv1 "github.com/opencairn-org/cairn-provider-sdk-go/proto/cairn/v1"
+	workerv1 "github.com/opencairn-org/cairn-provider-sdk-go/proto/cairn/worker/v1"
+	"github.com/opencairn-org/cairn-provider-sdk-go/workersdk"
 )
 
 // harness is a worker on an in-memory bus talking to a fake Strava API.
@@ -50,7 +50,7 @@ func newHarness(t *testing.T, strava http.HandlerFunc) *harness {
 		t.Fatal(err)
 	}
 
-	w, err := workersdk.New(workersdk.Config{Name: workerName, Provider: workerProvider, Bus: h.bus})
+	w, err := workersdk.New(workersdk.Config{Name: workerName, Provider: workerProvider, Version: workerVersion, Package: workerPackage, Bus: h.bus})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestBackfill_StopsOnShortPageAndPublishesResult(t *testing.T) {
 
 	body, _ := json.Marshal(backfillJob{JobID: "b1", AccountID: "acct", UserID: "u1", PageSize: 2})
 	job := workersdk.Job{Subject: "cairn.jobs.backfill.strava.strava-fetcher", Body: body}
-	if err := makeBackfillHandler(workerConfig{WorkerName: workerName}, h.client)(context.Background(), h.w, job); err != nil {
+	if err := makeBackfillHandler(h.client)(context.Background(), h.w, job); err != nil {
 		t.Fatalf("backfill: %v", err)
 	}
 
@@ -140,7 +140,7 @@ func TestBackfill_CapsAtMaxActivities(t *testing.T) {
 	h := newHarness(t, listingServer([][]stravaActivitySummary{summaries(1, 3), summaries(4, 3)}, &queries))
 
 	body, _ := json.Marshal(backfillJob{JobID: "b1", AccountID: "acct", PageSize: 3, MaxActivities: 2})
-	if err := makeBackfillHandler(workerConfig{}, h.client)(context.Background(), h.w, workersdk.Job{Subject: "cairn.jobs.backfill.strava.strava-fetcher", Body: body}); err != nil {
+	if err := makeBackfillHandler(h.client)(context.Background(), h.w, workersdk.Job{Subject: "cairn.jobs.backfill.strava.strava-fetcher", Body: body}); err != nil {
 		t.Fatalf("backfill: %v", err)
 	}
 	if n := len(h.fetchJobs(t)); n != 2 {
@@ -155,7 +155,7 @@ func TestBackfill_ListingNotFoundAcksWithoutResult(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) })
 
 	body, _ := json.Marshal(backfillJob{JobID: "b1", AccountID: "acct"})
-	if err := makeBackfillHandler(workerConfig{}, h.client)(context.Background(), h.w, workersdk.Job{Subject: "cairn.jobs.backfill.strava.strava-fetcher", Body: body}); err != nil {
+	if err := makeBackfillHandler(h.client)(context.Background(), h.w, workersdk.Job{Subject: "cairn.jobs.backfill.strava.strava-fetcher", Body: body}); err != nil {
 		t.Fatalf("backfill: %v; want nil (ack)", err)
 	}
 	if got := h.published("cairn.results.backfill.strava.strava-fetcher"); len(got) != 0 {
@@ -167,7 +167,7 @@ func TestBackfill_ListingUnauthorizedIsTerminal(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) })
 
 	body, _ := json.Marshal(backfillJob{JobID: "b1", AccountID: "acct"})
-	err := makeBackfillHandler(workerConfig{}, h.client)(context.Background(), h.w, workersdk.Job{Subject: "cairn.jobs.backfill.strava.strava-fetcher", Body: body})
+	err := makeBackfillHandler(h.client)(context.Background(), h.w, workersdk.Job{Subject: "cairn.jobs.backfill.strava.strava-fetcher", Body: body})
 	var term *port.TerminalError
 	if !errors.As(err, &term) || term.Reason != "needs_reauth" {
 		t.Fatalf("err = %v; want needs_reauth terminal", err)
@@ -176,7 +176,7 @@ func TestBackfill_ListingUnauthorizedIsTerminal(t *testing.T) {
 
 func TestBackfill_BadPayloadIsTerminal(t *testing.T) {
 	h := newHarness(t, func(http.ResponseWriter, *http.Request) {})
-	err := makeBackfillHandler(workerConfig{}, h.client)(context.Background(), h.w, workersdk.Job{Body: []byte("{")})
+	err := makeBackfillHandler(h.client)(context.Background(), h.w, workersdk.Job{Body: []byte("{")})
 	var term *port.TerminalError
 	if !errors.As(err, &term) || term.Reason != "bad_payload" {
 		t.Fatalf("err = %v; want bad_payload", err)
@@ -189,7 +189,7 @@ func TestReconcile_SkipsKnownAndAdvancesWatermark(t *testing.T) {
 
 	wm := time.Now().Add(-2 * time.Hour)
 	body, _ := json.Marshal(reconcileJob{JobID: "r1", AccountID: "acct", UserID: "u1", Watermark: &wm, KnownExtIDs: []string{"2"}})
-	if err := makeReconcileHandler(workerConfig{}, h.client)(context.Background(), h.w, workersdk.Job{Subject: "cairn.jobs.reconcile.strava.strava-fetcher", Body: body}); err != nil {
+	if err := makeReconcileHandler(h.client)(context.Background(), h.w, workersdk.Job{Subject: "cairn.jobs.reconcile.strava.strava-fetcher", Body: body}); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
@@ -226,7 +226,7 @@ func TestReconcile_StopsAtMaxEnqueue(t *testing.T) {
 	h := newHarness(t, listingServer([][]stravaActivitySummary{full, summaries(101, 100)}, &queries))
 
 	body, _ := json.Marshal(reconcileJob{JobID: "r1", AccountID: "acct", MaxEnqueue: 50})
-	if err := makeReconcileHandler(workerConfig{}, h.client)(context.Background(), h.w, workersdk.Job{Subject: "cairn.jobs.reconcile.strava.strava-fetcher", Body: body}); err != nil {
+	if err := makeReconcileHandler(h.client)(context.Background(), h.w, workersdk.Job{Subject: "cairn.jobs.reconcile.strava.strava-fetcher", Body: body}); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	// The cap is checked per page, so the whole first page is enqueued.
@@ -244,16 +244,16 @@ func TestReconcileWindowStart(t *testing.T) {
 	recent := now.Add(-3 * time.Hour)
 	ancient := now.Add(-365 * 24 * time.Hour)
 
-	if got := reconcileWindowStart(nil, now); got != floor {
+	if got := workersdk.ReconcileWindowStart(nil, now); got != floor {
 		t.Errorf("no watermark: %d; want floor %d", got, floor)
 	}
-	if got := reconcileWindowStart(&recent, now); got != recent.Add(-time.Hour).Unix() {
+	if got := workersdk.ReconcileWindowStart(&recent, now); got != recent.Add(-time.Hour).Unix() {
 		t.Errorf("recent watermark: %d; want watermark-1h", got)
 	}
-	if got := reconcileWindowStart(&ancient, now); got != floor {
+	if got := workersdk.ReconcileWindowStart(&ancient, now); got != floor {
 		t.Errorf("ancient watermark: %d; want floor %d", got, floor)
 	}
-	if got := reconcileWindowStart(nil, time.Unix(0, 0)); got != 0 {
+	if got := workersdk.ReconcileWindowStart(nil, time.Unix(0, 0)); got != 0 {
 		t.Errorf("pre-epoch window: %d; want 0", got)
 	}
 }
@@ -262,14 +262,7 @@ func TestDiscover_WalksUntilEmptyPage(t *testing.T) {
 	var queries []map[string]string
 	h := newHarness(t, listingServer([][]stravaActivitySummary{summaries(1, 2), summaries(3, 1)}, &queries))
 
-	out, err := makeDiscoverHandler(h.w, h.client)(context.Background(), []byte(`{"account_id":"acct"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var resp discoverResponse
-	if err := json.Unmarshal(out, &resp); err != nil {
-		t.Fatal(err)
-	}
+	resp := makeDiscoverHandler(h.w, h.client)(context.Background(), workersdk.DiscoverRequest{AccountID: "acct"})
 	if !resp.Complete || len(resp.Items) != 3 || resp.Items[2].ExternalID != "3" || resp.Error != "" {
 		t.Fatalf("resp = %+v; want 3 items, complete", resp)
 	}
@@ -286,14 +279,7 @@ func TestDiscover_BatchBoundary(t *testing.T) {
 	}
 	h := newHarness(t, listingServer(pages, &queries))
 
-	out, err := makeDiscoverHandler(h.w, h.client)(context.Background(), []byte(`{"account_id":"acct","start_page":3}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var resp discoverResponse
-	if err := json.Unmarshal(out, &resp); err != nil {
-		t.Fatal(err)
-	}
+	resp := makeDiscoverHandler(h.w, h.client)(context.Background(), workersdk.DiscoverRequest{AccountID: "acct", StartPage: 3})
 	if resp.Complete || len(resp.Items) != discoverMaxPagesPerCall || resp.NextPage != 3+discoverMaxPagesPerCall {
 		t.Fatalf("resp complete=%v items=%d next=%d", resp.Complete, len(resp.Items), resp.NextPage)
 	}
@@ -301,12 +287,7 @@ func TestDiscover_BatchBoundary(t *testing.T) {
 
 func TestDiscover_ListingErrorOnFirstPage(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) })
-	out, err := makeDiscoverHandler(h.w, h.client)(context.Background(), []byte(`{"account_id":"acct"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var resp discoverResponse
-	_ = json.Unmarshal(out, &resp)
+	resp := makeDiscoverHandler(h.w, h.client)(context.Background(), workersdk.DiscoverRequest{AccountID: "acct"})
 	if resp.Error == "" || len(resp.Items) != 0 {
 		t.Fatalf("resp = %+v; want an error", resp)
 	}
