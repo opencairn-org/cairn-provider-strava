@@ -2,24 +2,21 @@
 
 The Strava worker is a standalone process that imports a user's Strava data
 into Cairn. It shares no Go code with cairn-core: the contract is the
-`cairn.v1` / `cairn.worker.v1` proto messages (committed stubs in `proto/`) and
-the NATS subjects.
+`cairn.v1` / `cairn.worker.v1` proto messages and the NATS subjects, both
+implemented by [cairn-provider-sdk-go](https://github.com/opencairn-org/cairn-provider-sdk-go).
 
 ## Components
 
 ```
 cmd/worker-strava/   main, job handlers, Strava API client, auth, mapping, webhooks
-internal/workersdk/  job loop, presence heartbeat, token cache, presigning, results
-internal/nats/       JetStream bus adapter and the KV-backed rate limiter
-internal/port/       interfaces the SDK depends on (JobBus, KV, RateLimiter, errors)
-internal/capability/ capability manifest and data-type taxonomy
-internal/inmem/      in-memory JobBus/KV for tests
-proto/               generated contract stubs (scripts/sync-proto.sh)
 ```
 
-`internal/` packages depend only on `port`; `cmd/worker-strava` wires the NATS
-adapter, the rate limiter and the Strava auth handler into one
-`workersdk.Worker`.
+From the SDK: `workersdk` (job loop, presence heartbeat, token cache,
+presigning, claim-checked results, failure envelope, archive helpers, job
+payloads, discover and OAuth-exchange responders), `natsbus` (JetStream bus
+and the KV-backed rate limiter), `port`, `capability`, `inmem` (tests) and
+`proto`. `cmd/worker-strava` wires the bus, the rate limiter and the Strava
+auth handler into one `workersdk.Worker`.
 
 ## Data flow
 
@@ -42,6 +39,8 @@ adapter, the rate limiter and the Strava auth handler into one
      never fails the activity.
    - **parse_blob** re-maps an archived activity with the current mapping code,
      without spending Strava API budget.
+   The results of all four are claim-checked by the SDK; terminal failures go
+   out as the SDK's failure envelope.
 3. Tokens come from the server (`cairn.tokens.strava.get`) and are cached;
    refreshes go to Strava's token endpoint with the per-user OAuth app
    credentials the server supplies, and the result is stored back.

@@ -29,8 +29,10 @@ CLA. Sign off your commits (`git commit -s`) to assert the
   (`.github/workflows/check.yml`) runs the same target, and the image build
   gates on it.
 - Commit messages follow Conventional Commits (`feat:`, `fix:`, `refactor:` …).
-- `proto/` is generated from cairn-core's contract; do not edit it by hand.
-  Regenerate with `scripts/sync-proto.sh ../cairn-core` and commit the result.
+- The contract (proto stubs, subjects, job and result shapes) comes from
+  cairn-provider-sdk-go; a contract change is an SDK release, then a `go get`
+  here. Until the SDK is published, `go.mod` replaces it with the sibling
+  checkout `../cairn-provider-sdk-go`.
 - Handlers map failures onto the SDK's three outcomes: `*port.TerminalError`
   (Term), `*port.NakWithDelayError` (rate limit) or any other error (NAK and
   retry). New handlers follow `docs/ARCHITECTURE.md`.

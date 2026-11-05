@@ -4,13 +4,14 @@ SHELL := bash
 .ONESHELL:
 .DEFAULT_GOAL := check-fast
 MAIN_BRANCH ?= main
-# Total statement coverage the cover target enforces; the suite is at 91.7% (generated proto/ excluded).
+# Total statement coverage the cover target enforces.
 COVER_MIN   ?= 90
 PKGS        := ./...
-# Packages with hand-written code; proto/ holds generated stubs.
-COVER_PKGS   = $(shell go list ./... | grep -v /proto/)
+COVER_PKGS   = $(shell go list ./...)
 LICENSES    ?= MIT,Apache-2.0,BSD-2-Clause,BSD-3-Clause,ISC
 IMAGE       ?= cairn-provider-strava
+# The SDK checkout the local image build copies in (go.mod replaces the module with it until it is published).
+SDK_DIR     ?= ../cairn-provider-sdk-go
 # Each pin carries a `# renovate:` comment so Renovate bumps it (customManagers in renovate.json5).
 # renovate: datasource=go depName=github.com/golangci/golangci-lint/v2
 GOLANGCI_VERSION    ?= v2.14.0
@@ -20,14 +21,10 @@ GOVULNCHECK_VERSION ?= v1.9.0
 GO_LICENSES_VERSION ?= v2.0.1
 # renovate: datasource=go depName=github.com/fleetlint/fleetlint
 FLEETLINT_VERSION   ?= v0.8.1
-# renovate: datasource=go depName=github.com/go-gremlins/gremlins
-GREMLINS_VERSION    ?= v0.6.0
-# Mutation test efficacy floor for the SDK package (75.9% today).
-MUTATION_MIN        ?= 70
 # Tools are built with this module's toolchain: golangci-lint refuses code that targets a newer Go than it was built with.
 TOOLCHAIN   := $(shell go env GOVERSION)
 
-.PHONY: help tools fmt lint vet test cover audit bench mutate build image dist check-fast check release tidy clean
+.PHONY: help tools fmt lint vet test cover audit bench build image dist check-fast check release tidy clean
 
 help: ## list targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*##' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -37,7 +34,6 @@ tools: ## install the pinned Go tools the gates use (gitleaks comes from its own
 	GOTOOLCHAIN=$(TOOLCHAIN) go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
 	GOTOOLCHAIN=$(TOOLCHAIN) go install github.com/google/go-licenses/v2@$(GO_LICENSES_VERSION)
 	go install github.com/fleetlint/fleetlint/cmd/fleetlint@$(FLEETLINT_VERSION)
-	GOTOOLCHAIN=$(TOOLCHAIN) go install github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
 
 fmt: ## format in place
 	golangci-lint fmt
@@ -69,15 +65,11 @@ audit: ## vulnerabilities, licenses, tidy module graph, secrets
 bench: ## benchmarks (not part of check)
 	go test -run='^$$' -bench=. -benchmem $(PKGS)
 
-mutate: ## mutation testing of the SDK package (weekly in CI, not part of check)
-	# A cached base test run makes gremlins derive a near-zero timeout and every mutant times out.
-	GOFLAGS=-count=1 gremlins unleash --threshold-efficacy $(MUTATION_MIN) ./internal/workersdk
-
 build: ## build the worker binary
 	CGO_ENABLED=0 go build -trimpath -o worker-strava ./cmd/worker-strava
 
-image: ## build the container image locally (docker, or CONTAINER=podman)
-	$${CONTAINER:-docker} build -t $(IMAGE) .
+image: ## build the container image locally (docker, or CONTAINER=podman); the SDK checkout is a second build context
+	$${CONTAINER:-docker} build --build-context sdk=$(SDK_DIR) -t $(IMAGE) .
 
 dist: image ## release artifact: the container image (the build workflow pushes it)
 
