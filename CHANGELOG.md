@@ -6,6 +6,24 @@ to follow [Semantic Versioning](https://semver.org/). Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Changed
+- The worker is built on
+  [cairn-provider-sdk-go](https://github.com/opencairn-org/cairn-provider-sdk-go):
+  `internal/{workersdk,nats,capability,port,inmem,config}`, the committed
+  proto stubs and `scripts/sync-proto.sh` are gone, and the generic parts of
+  `cmd/worker-strava` (NATS connect, rate limiter, claim-check, failure
+  envelope, archive upload/download, job payloads, parser guard, reconcile
+  window, discover) call the SDK. Behaviour on the wire is unchanged.
+- Until the SDK is published, `go.mod` replaces the module with a local
+  checkout (`../cairn-provider-sdk-go`); `make image` passes it as a second
+  build context (`--build-context sdk=…`) and the Dockerfile rewrites the
+  replace to `/sdk`. Both go away at release, when the SDK is pinned by
+  version.
+
+### Removed
+- The weekly mutation-testing job and `make mutate`: the SDK package it
+  targeted now lives in the SDK repository.
+
 ## [0.7.0] — 2026-11-05
 
 Contract change: needs cairn-core 0.7 (docs/adr/0005).

@@ -23,32 +23,27 @@ cairn.oauth.strava.<name>.exchange      (request/reply) trade a connect-flow cod
 endpoint, scopes, credential labels) in the `cairn_worker_manifests` KV, so
 core needs no Strava knowledge of its own.
 
-## Standalone
+## Built on the provider SDK
 
-This is a **standalone repository** with no Go-code dependency on cairn-core.
-The only contract it shares with the server is the proto messages (committed Go
-stubs under `proto/`) and the NATS subjects — the same wire contract the Python
-Garmin worker uses. There is no buf / proto-generation step at build time.
+The worker is built on
+[cairn-provider-sdk-go](https://github.com/opencairn-org/cairn-provider-sdk-go),
+which implements the contract (NATS subjects, job and result shapes, the
+proto stubs) and the worker loop; this repository holds only the Strava
+client, the mapping and the handlers. There is no Go-code dependency on
+cairn-core and no buf / proto-generation step at build time: a proto change
+is a new SDK release. Until the SDK is published, `go.mod` replaces the
+module with a sibling checkout (`../cairn-provider-sdk-go`).
 
 The Docker build uses the shared `cairn-build-base` toolchain image by
 default (pinned Go 1.26, consistent with cairn-core). That's only a *toolchain*
 dependency, and it's overridable — build with zero coupling to the core image
-via `docker build --build-arg BUILD_BASE=golang:1.26-alpine .`.
-
-When the proto contract changes: run `make proto` in cairn-core, then
-`scripts/sync-proto.sh ../cairn-core` here and commit the regenerated stubs.
+via `docker build --build-arg BUILD_BASE=golang:1.26-alpine .`. `make image`
+passes the SDK checkout as a second build context (`SDK_DIR`).
 
 ## Layout
 
 ```
-cmd/worker-strava/   the Strava worker (main, handlers, API client, mapping…)
-internal/workersdk/  the Go worker SDK (job loop, heartbeat, token cache)
-internal/nats/       worker-side NATS client (bus + KV rate limiter)
-internal/capability/ capability manifest + datatype taxonomy
-internal/port/       the interfaces the worker consumes (JobBus, RateLimiter…)
-internal/config/     NATS connection settings
-internal/inmem/      in-memory bus for tests
-proto/               committed generated Go proto stubs (the contract)
+cmd/worker-strava/   the Strava worker (main, handlers, API client, mapping, auth, webhooks)
 ```
 
 ## Run (dev)
