@@ -9,10 +9,10 @@ import (
 
 	"google.golang.org/protobuf/encoding/protojson"
 
-	"github.com/opencairn-org/cairn-provider-strava/internal/port"
-	"github.com/opencairn-org/cairn-provider-strava/internal/workersdk"
-	cairnv1 "github.com/opencairn-org/cairn-provider-strava/proto/cairn/v1"
-	workerv1 "github.com/opencairn-org/cairn-provider-strava/proto/cairn/worker/v1"
+	"github.com/opencairn-org/cairn-provider-sdk-go/port"
+	cairnv1 "github.com/opencairn-org/cairn-provider-sdk-go/proto/cairn/v1"
+	workerv1 "github.com/opencairn-org/cairn-provider-sdk-go/proto/cairn/worker/v1"
+	"github.com/opencairn-org/cairn-provider-sdk-go/workersdk"
 )
 
 func gearJob(in importGearJob) workersdk.Job {
@@ -22,7 +22,7 @@ func gearJob(in importGearJob) workersdk.Job {
 
 func TestImportGear_PublishesEveryGear(t *testing.T) {
 	h, _ := fetchHarness(t, &stravaAPI{})
-	handler := makeImportGearHandler(workerConfig{WorkerName: workerName}, h.client)
+	handler := makeImportGearHandler(h.client)
 	if err := handler(context.Background(), h.w, gearJob(importGearJob{JobID: "g1", AccountID: "acct", UserID: "u1"})); err != nil {
 		t.Fatalf("import_gear: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestImportGear_PublishesEveryGear(t *testing.T) {
 
 func TestImportGear_Errors(t *testing.T) {
 	h, _ := fetchHarness(t, &stravaAPI{athlete: status(http.StatusInternalServerError)})
-	handler := makeImportGearHandler(workerConfig{}, h.client)
+	handler := makeImportGearHandler(h.client)
 	var term *port.TerminalError
 	if err := handler(context.Background(), h.w, workersdk.Job{Body: []byte("{")}); !errors.As(err, &term) || term.Reason != "bad_payload" {
 		t.Errorf("bad payload = %v", err)

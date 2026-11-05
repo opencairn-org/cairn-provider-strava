@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/opencairn-org/cairn-provider-strava/internal/port"
-	"github.com/opencairn-org/cairn-provider-strava/internal/workersdk"
+	"github.com/opencairn-org/cairn-provider-sdk-go/port"
+	"github.com/opencairn-org/cairn-provider-sdk-go/workersdk"
 )
 
 // webhookEvent wraps a Strava event in the server's forwarder envelope.

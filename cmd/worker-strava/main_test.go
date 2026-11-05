@@ -7,19 +7,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/nats-io/jwt/v2"
-	"github.com/nats-io/nats-server/v2/server"
-	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nkeys"
-
-	"github.com/opencairn-org/cairn-provider-strava/internal/inmem"
-	"github.com/opencairn-org/cairn-provider-strava/internal/port"
-	"github.com/opencairn-org/cairn-provider-strava/internal/workersdk"
+	"github.com/opencairn-org/cairn-provider-sdk-go/inmem"
+	"github.com/opencairn-org/cairn-provider-sdk-go/port"
+	"github.com/opencairn-org/cairn-provider-sdk-go/workersdk"
 )
 
 func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -40,9 +33,6 @@ func TestLoadConfig(t *testing.T) {
 	t.Setenv("CAIRN_LOG_LEVEL", "loud")
 	if _, err := loadConfig(); err == nil {
 		t.Error("bad log level: want error")
-	}
-	if hostnameOr("x") == "" {
-		t.Error("hostnameOr empty")
 	}
 }
 
@@ -75,7 +65,7 @@ func TestRegisterHandlers_SyncsUsageAndWebhooks(t *testing.T) {
 	}
 	t.Setenv("CAIRN_STRAVA_WEBHOOK_VERIFY_TOKEN", "s3cret")
 	client := newStravaClient()
-	registerHandlers(w, workerConfig{WorkerName: workerName}, client, quietLogger())
+	registerHandlers(w, client, quietLogger())
 
 	client.onUsage("", 10, 100, 20, 1000)
 	for _, key := range []string{"strava.strava-fetcher.short", "strava.strava-fetcher.daily"} {
@@ -89,129 +79,6 @@ func TestRegisterHandlers_SyncsUsageAndWebhooks(t *testing.T) {
 		}
 	}()
 	w.WebhookVerify(handleWebhookVerify)
-}
-
-func startNATS(t *testing.T) string {
-	t.Helper()
-	s, err := server.NewServer(&server.Options{Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir(), NoLog: true, NoSigs: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	go s.Start()
-	if !s.ReadyForConnections(10 * time.Second) {
-		t.Fatal("nats not ready")
-	}
-	t.Cleanup(s.Shutdown)
-	return s.ClientURL()
-}
-
-func TestConnectBus(t *testing.T) {
-	url := startNATS(t)
-	for name, cfg := range map[string]workerConfig{
-		"anonymous":   {NATSURL: url, WorkerName: "w"},
-		"static user": {NATSURL: url, WorkerName: "w", NATSUser: "u", NATSPassword: "p"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			bus, err := connectBus(cfg, quietLogger())
-			if err != nil {
-				t.Fatal(err)
-			}
-			bus.Close()
-		})
-	}
-	if _, err := connectBus(workerConfig{NATSURL: "nats://127.0.0.1:1"}, quietLogger()); err == nil {
-		t.Error("unreachable server: want error")
-	}
-}
-
-// startAuthCalloutNATS runs core's auth-callout nats.conf (no nkey users) with a
-// fake callout that admits token and binds the JWT to req.UserNkey, as core does.
-func startAuthCalloutNATS(t *testing.T, token string) (url string, nkeyOnConnect func() []string) {
-	t.Helper()
-	acct, err := nkeys.CreateAccount()
-	if err != nil {
-		t.Fatal(err)
-	}
-	acctPub, _ := acct.PublicKey()
-	t.Setenv("CAIRN_NATS_PASSWORD", "core-pw")
-	t.Setenv("CAIRN_NATS_AUTH_ISSUER", acctPub)
-	opts, err := server.ProcessConfigFile("testdata/nats-auth-callout.conf")
-	if err != nil {
-		t.Fatal(err)
-	}
-	opts.Host, opts.Port, opts.HTTPPort, opts.StoreDir = "127.0.0.1", -1, 0, t.TempDir()
-	opts.NoLog, opts.NoSigs = true, true
-	s, err := server.NewServer(opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	go s.Start()
-	if !s.ReadyForConnections(10 * time.Second) {
-		t.Fatal("nats not ready")
-	}
-	t.Cleanup(s.Shutdown)
-
-	core, err := nats.Connect(s.ClientURL(), nats.UserInfo("cairn-core", "core-pw"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(core.Close)
-	var mu sync.Mutex
-	var seen []string
-	_, err = core.Subscribe("$SYS.REQ.USER.AUTH", func(msg *nats.Msg) {
-		req, err := jwt.DecodeAuthorizationRequestClaims(string(msg.Data))
-		if err != nil {
-			t.Errorf("decode request: %v", err)
-			return
-		}
-		mu.Lock()
-		seen = append(seen, req.ConnectOptions.Nkey)
-		mu.Unlock()
-		resp := jwt.NewAuthorizationResponseClaims(req.UserNkey)
-		resp.Audience = req.Server.ID
-		resp.IssuerAccount = acctPub
-		if req.ConnectOptions.Token == token {
-			uc := jwt.NewUserClaims(req.UserNkey)
-			uc.Audience = "CAIRN"
-			uc.Pub.Allow.Add(">")
-			uc.Sub.Allow.Add(">")
-			if resp.Jwt, err = uc.Encode(acct); err != nil {
-				t.Errorf("encode user jwt: %v", err)
-				return
-			}
-		} else {
-			resp.Error = "invalid_token"
-		}
-		enc, err := resp.Encode(acct)
-		if err != nil {
-			t.Errorf("encode response: %v", err)
-			return
-		}
-		_ = msg.Respond([]byte(enc))
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := core.Flush(); err != nil {
-		t.Fatal(err)
-	}
-	return s.ClientURL(), func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), seen...) }
-}
-
-func TestConnectBus_EnrollmentToken_AuthCallout(t *testing.T) {
-	url, seen := startAuthCalloutNATS(t, "enroll-1")
-	bus, err := connectBus(workerConfig{NATSURL: url, WorkerName: "w", EnrollmentToken: "enroll-1"}, quietLogger())
-	if err != nil {
-		t.Fatalf("token-only connect without a placeholder nkey user: %v", err)
-	}
-	bus.Close()
-	if got := seen(); len(got) != 1 || got[0] != "" {
-		t.Errorf("CONNECT nkeys = %q; want one token-only connect", got)
-	}
-	_, err = connectBus(workerConfig{NATSURL: url, WorkerName: "w", EnrollmentToken: "wrong"}, quietLogger())
-	if err == nil || !strings.Contains(err.Error(), "Authorization Violation") {
-		t.Fatalf("wrong token: err = %v; want an authorization violation", err)
-	}
 }
 
 func TestStravaClient_OtherEndpoints(t *testing.T) {
@@ -325,17 +192,8 @@ func TestBlobHelpers(t *testing.T) {
 	defer srv.Close()
 
 	up := workersdk.PresignedURL{URL: srv.URL + "/ok", RequiredHeaders: map[string]string{"X-Amz-Meta": "m", "Content-Type": "application/x"}}
-	if err := putPresigned(ctx, up, []byte("b"), "application/json"); err != nil || gotHeader != "m" || gotCT != "application/x" || gotMethod != http.MethodPut {
+	if err := workersdk.PutPresigned(ctx, up, []byte("b"), "application/json"); err != nil || gotHeader != "m" || gotCT != "application/x" || gotMethod != http.MethodPut {
 		t.Errorf("put = %v (header %q ct %q method %q)", err, gotHeader, gotCT, gotMethod)
-	}
-	if err := putPresigned(ctx, workersdk.PresignedURL{URL: srv.URL + "/fail"}, nil, "x"); err == nil {
-		t.Error("403 put: want error")
-	}
-	if err := putPresigned(ctx, workersdk.PresignedURL{URL: "http://127.0.0.1:1"}, nil, "x"); err == nil {
-		t.Error("unreachable put: want error")
-	}
-	if err := putPresigned(ctx, workersdk.PresignedURL{URL: "://bad"}, nil, "x"); err == nil {
-		t.Error("bad url put: want error")
 	}
 
 	if _, _, err := downloadPhoto(ctx, srv.URL+"/fail"); err == nil {

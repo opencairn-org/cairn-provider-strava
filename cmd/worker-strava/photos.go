@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/opencairn-org/cairn-provider-strava/internal/workersdk"
-	workerv1 "github.com/opencairn-org/cairn-provider-strava/proto/cairn/worker/v1"
+	workerv1 "github.com/opencairn-org/cairn-provider-sdk-go/proto/cairn/worker/v1"
+	"github.com/opencairn-org/cairn-provider-sdk-go/workersdk"
 )
 
 // photoFetchSize is the max pixel dimension requested from Strava's photos
@@ -85,7 +85,7 @@ func mirrorPhoto(ctx context.Context, w *workersdk.Worker, userID, activityID, u
 		w.Logger().Warn("photo presign failed", "activity", activityID, "error", err)
 		return nil
 	}
-	if err := putPresigned(ctx, up, data, ct); err != nil {
+	if err := workersdk.PutPresigned(ctx, up, data, ct); err != nil {
 		w.Logger().Warn("photo upload failed", "activity", activityID, "error", err)
 		return nil
 	}
@@ -127,7 +127,7 @@ func downloadPhoto(ctx context.Context, url string) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	resp, err := archiveHTTPClient.Do(req)
+	resp, err := workersdk.BlobHTTPClient.Do(req)
 	if err != nil {
 		return nil, "", err
 	}

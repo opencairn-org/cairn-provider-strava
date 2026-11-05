@@ -11,7 +11,7 @@ import (
 
 	"google.golang.org/protobuf/encoding/protojson"
 
-	workerv1 "github.com/opencairn-org/cairn-provider-strava/proto/cairn/worker/v1"
+	workerv1 "github.com/opencairn-org/cairn-provider-sdk-go/proto/cairn/worker/v1"
 )
 
 var updateGolden = flag.Bool("update", false, "write golden files for a new parser version")

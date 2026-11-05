@@ -8,9 +8,9 @@ import (
 
 	"google.golang.org/protobuf/encoding/protojson"
 
-	"github.com/opencairn-org/cairn-provider-strava/internal/port"
-	"github.com/opencairn-org/cairn-provider-strava/internal/workersdk"
-	workerv1 "github.com/opencairn-org/cairn-provider-strava/proto/cairn/worker/v1"
+	"github.com/opencairn-org/cairn-provider-sdk-go/port"
+	workerv1 "github.com/opencairn-org/cairn-provider-sdk-go/proto/cairn/worker/v1"
+	"github.com/opencairn-org/cairn-provider-sdk-go/workersdk"
 )
 
 // ---------------------------------------------------------------------------
@@ -21,15 +21,9 @@ import (
 // inside the budget. Published inline (no claim-check): the result is small.
 // ---------------------------------------------------------------------------
 
-type importGearJob struct {
-	JobID     string `json:"job_id"`
-	AccountID string `json:"account_id"`
-	UserID    string `json:"user_id"`
-	Provider  string `json:"provider"`
-	Reason    string `json:"reason"`
-}
+type importGearJob = workersdk.ImportGearJob
 
-func makeImportGearHandler(cfg workerConfig, client *stravaClient) func(context.Context, *workersdk.Worker, workersdk.Job) error {
+func makeImportGearHandler(client *stravaClient) func(context.Context, *workersdk.Worker, workersdk.Job) error {
 	return func(ctx context.Context, w *workersdk.Worker, job workersdk.Job) error {
 		var in importGearJob
 		if err := json.Unmarshal(job.Body, &in); err != nil {
@@ -45,10 +39,10 @@ func makeImportGearHandler(cfg workerConfig, client *stravaClient) func(context.
 		ref := fetchSourceJob{JobID: in.JobID, AccountID: in.AccountID, UserID: in.UserID}
 		events, err := collectGear(ctx, w, client, token.AccessToken, ref)
 		if err != nil {
-			return mapStravaErr(ctx, w, cfg, job, ref, err, "fetch_gear")
+			return mapStravaErr(ctx, w, job, ref, err, "fetch_gear")
 		}
 
-		body, err := protojson.Marshal(newJobResult(cfg, events...))
+		body, err := protojson.Marshal(newJobResult(w, events...))
 		if err != nil {
 			return &port.TerminalError{Reason: "marshal_result", Cause: err}
 		}

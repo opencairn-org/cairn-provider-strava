@@ -1,15 +1,12 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"time"
 
-	"github.com/opencairn-org/cairn-provider-strava/internal/workersdk"
+	"github.com/opencairn-org/cairn-provider-sdk-go/workersdk"
 )
 
 // archivedActivity is the self-describing blob format the worker stores in
@@ -38,20 +35,18 @@ type archiveProvenance struct {
 	ArchivedAt    time.Time `json:"archived_at"`
 }
 
-var archiveHTTPClient = &http.Client{Timeout: 30 * time.Second}
-
 // archiveActivityBlob marshals the raw fetched activity (+streams) plus worker
 // provenance and uploads it via a server-minted presigned PUT, returning the
 // blob id (full S3 key) to store as raw_blob_id and the archived byte size (the
 // content type is always application/json). Best-effort: returns an error on
 // any failure; the caller logs and continues, since the import is durable
 // without the archive.
-func archiveActivityBlob(ctx context.Context, w *workersdk.Worker, cfg workerConfig, userID string, act *stravaActivity, streams stravaStreamsResponse) (blobID string, sizeBytes int64, err error) {
+func archiveActivityBlob(ctx context.Context, w *workersdk.Worker, userID string, act *stravaActivity, streams stravaStreamsResponse) (blobID string, sizeBytes int64, err error) {
 	body, err := json.Marshal(archivedActivity{
 		Version: datasetVersion,
 		Provenance: archiveProvenance{
 			Provider:      workerProvider,
-			WorkerName:    cfg.WorkerName,
+			WorkerName:    w.Name(),
 			WorkerVersion: workerVersion,
 			Package:       workerPackage,
 			ArchivedAt:    time.Now().UTC(),
@@ -63,66 +58,13 @@ func archiveActivityBlob(ctx context.Context, w *workersdk.Worker, cfg workerCon
 		return "", 0, fmt.Errorf("marshal archive: %w", err)
 	}
 
-	up, err := w.PresignUpload(ctx, workersdk.PresignUploadRequest{
-		UserID:        userID,
-		ContentType:   "application/json",
-		ContentLength: int64(len(body)),
-	})
-	if err != nil {
-		return "", 0, fmt.Errorf("presign upload: %w", err)
-	}
-	if err := putPresigned(ctx, up, body, "application/json"); err != nil {
-		return "", 0, err
-	}
-	return up.BlobID, int64(len(body)), nil
-}
-
-// putPresigned uploads body to a server-minted presigned URL, sending the
-// required headers verbatim. Shared by the raw-archive and claim-check
-// result paths.
-func putPresigned(ctx context.Context, up workersdk.PresignedURL, body []byte, contentType string) error {
-	method := up.Method
-	if method == "" {
-		method = http.MethodPut
-	}
-	req, err := http.NewRequestWithContext(ctx, method, up.URL, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	for k, v := range up.RequiredHeaders {
-		req.Header.Set(k, v)
-	}
-	if req.Header.Get("Content-Type") == "" {
-		req.Header.Set("Content-Type", contentType)
-	}
-	resp, err := archiveHTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("blob PUT: %w", err)
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("blob PUT status %d", resp.StatusCode)
-	}
-	return nil
+	return w.ArchiveBlob(ctx, userID, body, "application/json")
 }
 
 // downloadArchivedActivity GETs and decodes an archived blob from a presigned
 // URL (the parse_blob read path).
 func downloadArchivedActivity(ctx context.Context, url string) (archivedActivity, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return archivedActivity{}, err
-	}
-	resp, err := archiveHTTPClient.Do(req)
-	if err != nil {
-		return archivedActivity{}, fmt.Errorf("blob GET: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return archivedActivity{}, fmt.Errorf("blob GET status %d", resp.StatusCode)
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20)) // 64 MiB cap
+	data, err := workersdk.DownloadBlob(ctx, url)
 	if err != nil {
 		return archivedActivity{}, err
 	}

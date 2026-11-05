@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/opencairn-org/cairn-provider-strava/internal/port"
-	"github.com/opencairn-org/cairn-provider-strava/internal/workersdk"
+	"github.com/opencairn-org/cairn-provider-sdk-go/port"
+	"github.com/opencairn-org/cairn-provider-sdk-go/workersdk"
 )
 
 // StravaAuthHandler implements workersdk.AuthHandler for Strava's OAuth2

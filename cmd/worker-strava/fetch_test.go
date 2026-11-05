@@ -15,12 +15,12 @@ import (
 
 	"google.golang.org/protobuf/encoding/protojson"
 
-	"github.com/opencairn-org/cairn-provider-strava/internal/inmem"
-	natsadapter "github.com/opencairn-org/cairn-provider-strava/internal/nats"
-	"github.com/opencairn-org/cairn-provider-strava/internal/port"
-	"github.com/opencairn-org/cairn-provider-strava/internal/workersdk"
-	cairnv1 "github.com/opencairn-org/cairn-provider-strava/proto/cairn/v1"
-	workerv1 "github.com/opencairn-org/cairn-provider-strava/proto/cairn/worker/v1"
+	"github.com/opencairn-org/cairn-provider-sdk-go/inmem"
+	"github.com/opencairn-org/cairn-provider-sdk-go/natsbus"
+	"github.com/opencairn-org/cairn-provider-sdk-go/port"
+	cairnv1 "github.com/opencairn-org/cairn-provider-sdk-go/proto/cairn/v1"
+	workerv1 "github.com/opencairn-org/cairn-provider-sdk-go/proto/cairn/worker/v1"
+	"github.com/opencairn-org/cairn-provider-sdk-go/workersdk"
 )
 
 // blobStore is a fake object store behind the presign responders.
@@ -184,7 +184,7 @@ func activityEvent(t *testing.T, res *workerv1.JobResult) *workerv1.ImportedActi
 
 func TestFetchSource_PublishesActivityAndSegments(t *testing.T) {
 	h, store := fetchHarness(t, &stravaAPI{})
-	handler := makeFetchSourceHandler(workerConfig{WorkerName: workerName}, h.client)
+	handler := makeFetchSourceHandler(h.client)
 	in := fetchSourceJob{JobID: "j1", AccountID: "acct", UserID: "u1", ExtID: "42", FetchStreams: true, Reason: "webhook"}
 	if err := handler(context.Background(), h.w, fetchJob(in)); err != nil {
 		t.Fatalf("fetch_source: %v", err)
@@ -243,7 +243,7 @@ func TestFetchSource_PublishesActivityAndSegments(t *testing.T) {
 
 func TestFetchSource_PayloadValidation(t *testing.T) {
 	h, _ := fetchHarness(t, &stravaAPI{})
-	handler := makeFetchSourceHandler(workerConfig{}, h.client)
+	handler := makeFetchSourceHandler(h.client)
 	var term *port.TerminalError
 	if err := handler(context.Background(), h.w, workersdk.Job{Body: []byte("{")}); !errors.As(err, &term) || term.Reason != "bad_payload" {
 		t.Errorf("bad payload = %v", err)
@@ -262,7 +262,7 @@ func TestFetchSource_ActivityErrors(t *testing.T) {
 
 	t.Run("unauthorized is terminal and reports failure", func(t *testing.T) {
 		h, _ := fetchHarness(t, &stravaAPI{activity: status(http.StatusUnauthorized)})
-		err := makeFetchSourceHandler(workerConfig{}, h.client)(context.Background(), h.w, fetchJob(in))
+		err := makeFetchSourceHandler(h.client)(context.Background(), h.w, fetchJob(in))
 		var term *port.TerminalError
 		if !errors.As(err, &term) || term.Reason != "needs_reauth" {
 			t.Fatalf("err = %v", err)
@@ -274,7 +274,7 @@ func TestFetchSource_ActivityErrors(t *testing.T) {
 
 	t.Run("not found acks and announces deletion", func(t *testing.T) {
 		h, _ := fetchHarness(t, &stravaAPI{activity: status(http.StatusNotFound)})
-		if err := makeFetchSourceHandler(workerConfig{}, h.client)(context.Background(), h.w, fetchJob(in)); err != nil {
+		if err := makeFetchSourceHandler(h.client)(context.Background(), h.w, fetchJob(in)); err != nil {
 			t.Fatalf("err = %v; want nil", err)
 		}
 		if n := len(h.published("cairn.events.source.deleted_upstream")); n != 1 {
@@ -290,7 +290,7 @@ func TestFetchSource_ActivityErrors(t *testing.T) {
 			w.Header().Set("Retry-After", "30")
 			w.WriteHeader(http.StatusTooManyRequests)
 		}})
-		err := makeFetchSourceHandler(workerConfig{}, h.client)(context.Background(), h.w, fetchJob(in))
+		err := makeFetchSourceHandler(h.client)(context.Background(), h.w, fetchJob(in))
 		var nak *port.NakWithDelayError
 		if !errors.As(err, &nak) || nak.Delay < 29*time.Second || nak.Delay > 31*time.Second {
 			t.Fatalf("err = %v", err)
@@ -299,7 +299,7 @@ func TestFetchSource_ActivityErrors(t *testing.T) {
 
 	t.Run("server error is retryable", func(t *testing.T) {
 		h, _ := fetchHarness(t, &stravaAPI{activity: status(http.StatusBadGateway)})
-		err := makeFetchSourceHandler(workerConfig{}, h.client)(context.Background(), h.w, fetchJob(in))
+		err := makeFetchSourceHandler(h.client)(context.Background(), h.w, fetchJob(in))
 		var term *port.TerminalError
 		var nak *port.NakWithDelayError
 		if err == nil || errors.As(err, &term) || errors.As(err, &nak) {
@@ -312,7 +312,7 @@ func TestFetchSource_ActivityErrors(t *testing.T) {
 		_, _ = h.bus.RespondTo(context.Background(), "cairn.tokens.strava.get", func(context.Context, []byte) ([]byte, error) {
 			return json.Marshal(map[string]string{"error": "needs_reauth"})
 		})
-		err := makeFetchSourceHandler(workerConfig{}, h.client)(context.Background(), h.w, fetchJob(in))
+		err := makeFetchSourceHandler(h.client)(context.Background(), h.w, fetchJob(in))
 		var term *port.TerminalError
 		if !errors.As(err, &term) || term.Reason != "needs_reauth" {
 			t.Fatalf("err = %v", err)
@@ -324,7 +324,7 @@ func TestFetchSource_StreamOutcomes(t *testing.T) {
 	in := fetchSourceJob{JobID: "j1", ExtID: "42", FetchStreams: true}
 
 	h, store := fetchHarness(t, &stravaAPI{streams: status(http.StatusNotFound), photos: status(http.StatusInternalServerError)})
-	if err := makeFetchSourceHandler(workerConfig{}, h.client)(context.Background(), h.w, fetchJob(in)); err != nil {
+	if err := makeFetchSourceHandler(h.client)(context.Background(), h.w, fetchJob(in)); err != nil {
 		t.Fatalf("streams 404: %v", err)
 	}
 	act := activityEvent(t, store.results(t, h, resultsFetch)[0])
@@ -336,14 +336,14 @@ func TestFetchSource_StreamOutcomes(t *testing.T) {
 	}
 
 	h, _ = fetchHarness(t, &stravaAPI{streams: status(http.StatusInternalServerError)})
-	if err := makeFetchSourceHandler(workerConfig{}, h.client)(context.Background(), h.w, fetchJob(in)); err == nil {
+	if err := makeFetchSourceHandler(h.client)(context.Background(), h.w, fetchJob(in)); err == nil {
 		t.Fatal("streams 500: want error")
 	}
 }
 
 func TestFetchSource_SegmentRateLimitDefersRest(t *testing.T) {
 	h, store := fetchHarness(t, &stravaAPI{segment7: status(http.StatusTooManyRequests)})
-	err := makeFetchSourceHandler(workerConfig{}, h.client)(context.Background(), h.w, fetchJob(fetchSourceJob{JobID: "j", ExtID: "42", FetchStreams: true}))
+	err := makeFetchSourceHandler(h.client)(context.Background(), h.w, fetchJob(fetchSourceJob{JobID: "j", ExtID: "42", FetchStreams: true}))
 	var nak *port.NakWithDelayError
 	if !errors.As(err, &nak) || nak.Reason != "rate_limited_segments" || nak.Delay <= 0 {
 		t.Fatalf("err = %v", err)
@@ -356,7 +356,7 @@ func TestFetchSource_SegmentRateLimitDefersRest(t *testing.T) {
 func TestFetchSource_BlobStoreDown(t *testing.T) {
 	h, store := fetchHarness(t, &stravaAPI{})
 	store.failPut = true
-	err := makeFetchSourceHandler(workerConfig{}, h.client)(context.Background(), h.w, fetchJob(fetchSourceJob{JobID: "j", ExtID: "42"}))
+	err := makeFetchSourceHandler(h.client)(context.Background(), h.w, fetchJob(fetchSourceJob{JobID: "j", ExtID: "42"}))
 	if err == nil || !strings.Contains(err.Error(), "upload result payload") {
 		t.Fatalf("err = %v", err)
 	}
@@ -367,7 +367,7 @@ func limitedHarness(t *testing.T, api *stravaAPI, capacities map[string]int) (*h
 	t.Helper()
 	h, store := fetchHarness(t, api)
 	kv, _ := h.bus.KV("cairn_rate_limits")
-	w, err := workersdk.New(workersdk.Config{Name: workerName, Provider: workerProvider, Bus: h.bus, Limiter: natsadapter.NewRateLimiter(kv, capacities)})
+	w, err := workersdk.New(workersdk.Config{Name: workerName, Provider: workerProvider, Bus: h.bus, Limiter: natsbus.NewRateLimiter(kv, capacities)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,13 +380,13 @@ func TestFetchSource_BudgetExhaustion(t *testing.T) {
 	var nak *port.NakWithDelayError
 
 	h2, _ := limitedHarness(t, &stravaAPI{}, map[string]int{rateBucket("", "short"): 1})
-	if err := makeFetchSourceHandler(workerConfig{}, h2.client)(context.Background(), h2.w, fetchJob(in)); !errors.As(err, &nak) {
+	if err := makeFetchSourceHandler(h2.client)(context.Background(), h2.w, fetchJob(in)); !errors.As(err, &nak) {
 		t.Errorf("streams reserve: err = %v", err)
 	}
 
 	// Activity, streams and photos fit; the first segment does not.
 	h3, store := limitedHarness(t, &stravaAPI{}, map[string]int{rateBucket("", "short"): 3})
-	err := makeFetchSourceHandler(workerConfig{}, h3.client)(context.Background(), h3.w, fetchJob(in))
+	err := makeFetchSourceHandler(h3.client)(context.Background(), h3.w, fetchJob(in))
 	if !errors.As(err, &nak) || nak.Reason != "rate_limited_segments" {
 		t.Errorf("segment reserve: err = %v", err)
 	}
@@ -395,8 +395,8 @@ func TestFetchSource_BudgetExhaustion(t *testing.T) {
 	}
 
 	h4, _ := limitedHarness(t, &stravaAPI{}, map[string]int{rateBucket("", "daily"): 1})
-	_ = makeFetchSourceHandler(workerConfig{}, h4.client)(context.Background(), h4.w, fetchJob(fetchSourceJob{JobID: "a", ExtID: "42"}))
-	if err := makeFetchSourceHandler(workerConfig{}, h4.client)(context.Background(), h4.w, fetchJob(fetchSourceJob{JobID: "b", ExtID: "42"})); !errors.As(err, &nak) {
+	_ = makeFetchSourceHandler(h4.client)(context.Background(), h4.w, fetchJob(fetchSourceJob{JobID: "a", ExtID: "42"}))
+	if err := makeFetchSourceHandler(h4.client)(context.Background(), h4.w, fetchJob(fetchSourceJob{JobID: "b", ExtID: "42"})); !errors.As(err, &nak) {
 		t.Errorf("daily budget: err = %v", err)
 	}
 }
@@ -416,7 +416,7 @@ func TestParseBlob(t *testing.T) {
 		GearID: "g9", Gear: &stravaGearSummary{ID: "g9", Nickname: "Pegasus"}}})
 	store.put("raw1", archive)
 	store.put("empty", []byte(`{"version":1}`))
-	handler := makeParseBlobHandler(workerConfig{WorkerName: workerName})
+	handler := makeParseBlobHandler()
 	ctx := context.Background()
 
 	var in parseBlobJob
@@ -481,7 +481,7 @@ func TestParseBlob(t *testing.T) {
 
 func TestParseBlob_VersionGuards(t *testing.T) {
 	h, store := fetchHarness(t, &stravaAPI{})
-	handler := makeParseBlobHandler(workerConfig{WorkerName: workerName})
+	handler := makeParseBlobHandler()
 	ctx := context.Background()
 
 	// A source parsed by a newer parser: NAK so a newer pool instance takes it.
@@ -500,7 +500,7 @@ func TestParseBlob_VersionGuards(t *testing.T) {
 	if err := handler(ctx, h.w, tooOld); !errors.As(err, &exhausted) || exhausted.Reason != "parser_too_old" {
 		t.Fatalf("exhausted: err = %v", err)
 	}
-	if parserTooOldBackoff(1) != 30*time.Second || parserTooOldBackoff(99) != 10*time.Minute {
+	if workersdk.ParserTooOldBackoff(1) != 30*time.Second || workersdk.ParserTooOldBackoff(99) != 10*time.Minute {
 		t.Error("backoff bounds")
 	}
 

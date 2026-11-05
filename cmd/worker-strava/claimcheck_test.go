@@ -12,10 +12,10 @@ import (
 
 	"google.golang.org/protobuf/encoding/protojson"
 
-	"github.com/opencairn-org/cairn-provider-strava/internal/inmem"
-	"github.com/opencairn-org/cairn-provider-strava/internal/port"
-	"github.com/opencairn-org/cairn-provider-strava/internal/workersdk"
-	workerv1 "github.com/opencairn-org/cairn-provider-strava/proto/cairn/worker/v1"
+	"github.com/opencairn-org/cairn-provider-sdk-go/inmem"
+	"github.com/opencairn-org/cairn-provider-sdk-go/port"
+	workerv1 "github.com/opencairn-org/cairn-provider-sdk-go/proto/cairn/worker/v1"
+	"github.com/opencairn-org/cairn-provider-sdk-go/workersdk"
 )
 
 func TestPublishResultViaBlob_UploadsBodyAndPublishesEnvelope(t *testing.T) {
@@ -119,7 +119,7 @@ func TestPublishFailureResult_PublishesErrorEnvelope(t *testing.T) {
 
 	in := fetchSourceJob{JobID: "j1", AccountID: "acc-1", UserID: "u-1", ExtID: "42"}
 	job := workersdk.Job{Subject: "cairn.jobs.fetch_source.strava.strava-fetcher", DeliveryAttempt: 2}
-	publishFailureResult(ctx, w, workerConfig{WorkerName: "strava-fetcher"}, job, in, "needs_reauth", nil)
+	publishFailureResult(ctx, w, job, in, "needs_reauth", nil)
 
 	var env workerv1.JobResult
 	if err := protojson.Unmarshal(published.Body, &env); err != nil {
