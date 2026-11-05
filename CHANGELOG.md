@@ -6,6 +6,8 @@ to follow [Semantic Versioning](https://semver.org/). Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-11-05
+
 Contract change: needs cairn-core 0.7 (docs/adr/0005).
 
 ### Added
