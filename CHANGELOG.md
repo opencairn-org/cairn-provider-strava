@@ -23,11 +23,13 @@ to follow [Semantic Versioning](https://semver.org/). Dates are ISO-8601.
   `cmd/worker-strava` (NATS connect, rate limiter, claim-check, failure
   envelope, archive upload/download, job payloads, parser guard, reconcile
   window, discover) call the SDK. Behaviour on the wire is unchanged.
-- Until the SDK is published, `go.mod` replaces the module with a local
-  checkout (`../cairn-provider-sdk-go`); `make image` passes it as a second
-  build context (`--build-context sdk=…`) and the Dockerfile rewrites the
-  replace to `/sdk`. Both go away at release, when the SDK is pinned by
-  version.
+
+### Fixed
+- Rate limits (from the SDK): a deleted or purged rate-limit key (`nats kv
+  del`, a reset) no longer denies every reservation of that window until the
+  bucket's TTL runs out.
+- Presence and manifest are published only once every job consumer and the
+  webhook subscriber exist, so a heartbeat means the worker takes work.
 
 ### Removed
 - The weekly mutation-testing job and `make mutate`: the SDK package it

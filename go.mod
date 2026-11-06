@@ -5,12 +5,9 @@ go 1.26.0
 toolchain go1.26.10
 
 require (
-	github.com/opencairn-org/cairn-provider-sdk-go v0.0.0
+	github.com/opencairn-org/cairn-provider-sdk-go v0.7.1
 	google.golang.org/protobuf v1.36.12
 )
-
-// Local until the SDK is published; drop at release (the Dockerfile sets the same replace to /sdk).
-replace github.com/opencairn-org/cairn-provider-sdk-go => ../cairn-provider-sdk-go
 
 require (
 	github.com/klauspost/compress v1.20.3 // indirect

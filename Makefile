@@ -10,8 +10,6 @@ PKGS        := ./...
 COVER_PKGS   = $(shell go list ./...)
 LICENSES    ?= MIT,Apache-2.0,BSD-2-Clause,BSD-3-Clause,ISC
 IMAGE       ?= cairn-provider-strava
-# The SDK checkout the local image build copies in (go.mod replaces the module with it until it is published).
-SDK_DIR     ?= ../cairn-provider-sdk-go
 # Each pin carries a `# renovate:` comment so Renovate bumps it (customManagers in renovate.json5).
 # renovate: datasource=go depName=github.com/golangci/golangci-lint/v2
 GOLANGCI_VERSION    ?= v2.14.0
@@ -68,8 +66,8 @@ bench: ## benchmarks (not part of check)
 build: ## build the worker binary
 	CGO_ENABLED=0 go build -trimpath -o worker-strava ./cmd/worker-strava
 
-image: ## build the container image locally (docker, or CONTAINER=podman); the SDK checkout is a second build context
-	$${CONTAINER:-docker} build --build-context sdk=$(SDK_DIR) -t $(IMAGE) .
+image: ## build the container image locally (docker, or CONTAINER=podman)
+	$${CONTAINER:-docker} build -t $(IMAGE) .
 
 dist: image ## release artifact: the container image (the build workflow pushes it)
 

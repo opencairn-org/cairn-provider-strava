@@ -31,8 +31,8 @@ CLA. Sign off your commits (`git commit -s`) to assert the
 - Commit messages follow Conventional Commits (`feat:`, `fix:`, `refactor:` …).
 - The contract (proto stubs, subjects, job and result shapes) comes from
   cairn-provider-sdk-go; a contract change is an SDK release, then a `go get`
-  here. Until the SDK is published, `go.mod` replaces it with the sibling
-  checkout `../cairn-provider-sdk-go`.
+  here. To try an unreleased SDK change, point `go.mod` at a checkout with a
+  local `replace` and drop it before committing.
 - Handlers map failures onto the SDK's three outcomes: `*port.TerminalError`
   (Term), `*port.NakWithDelayError` (rate limit) or any other error (NAK and
   retry). New handlers follow `docs/ARCHITECTURE.md`.
