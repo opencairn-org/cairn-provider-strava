@@ -6,6 +6,11 @@ to follow [Semantic Versioning](https://semver.org/). Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-11-06
+
+Built on [cairn-provider-sdk-go](https://github.com/opencairn-org/cairn-provider-sdk-go)
+v0.7.1, released in lockstep with cairn-core 0.7.1. Works with any core 0.7.
+
 ### Added
 - `CAIRN_STRAVA_API_BASE_URL` and `CAIRN_STRAVA_OAUTH_BASE_URL` point the API
   client and the authorize/token endpoints at a stand-in (mock, e2e runs);
