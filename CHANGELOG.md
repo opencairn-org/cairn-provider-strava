@@ -18,7 +18,8 @@ v0.7.1, released in lockstep with cairn-core 0.7.1. Works with any core 0.7.
 - `cmd/mock-strava` (`internal/mockstrava`): a standalone mock Strava for
   end-to-end runs — auto-approving OAuth with refresh, seeded rides with
   laps, streams and gear, Strava-shaped rate-limit headers, and a `/_mock/*`
-  control API (add activities, emit webhooks, inject 429s, stats).
+  control API (add activities, emit webhooks, inject 429s, stats). It
+  redirects to and calls back loopback URLs only.
 
 ### Changed
 - The worker is built on

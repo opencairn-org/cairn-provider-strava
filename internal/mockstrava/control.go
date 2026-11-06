@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -96,8 +97,11 @@ func (s *Server) controlEmitWebhook(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": status, "body": body})
 }
 
-// EmitWebhook POSTs a Strava activity event to url and returns the reply.
+// EmitWebhook POSTs a Strava activity event to url (a loopback URL) and returns the reply.
 func (s *Server) EmitWebhook(ctx context.Context, url, aspect string, activityID int64) (status int, body string, err error) {
+	if !loopback.MatchString(url) {
+		return 0, "", fmt.Errorf("webhook target %q is not a loopback URL", url)
+	}
 	s.mu.Lock()
 	subID := int64(1)
 	if len(s.subs) > 0 {

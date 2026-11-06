@@ -33,7 +33,7 @@ func mockRun(t *testing.T, opts mockstrava.Options) (*mockstrava.Server, string,
 // authorizeCode runs the mock's auto-approving authorize and returns the code.
 func authorizeCode(t *testing.T, authorizeURL string) string {
 	t.Helper()
-	q := url.Values{"client_id": {"app"}, "redirect_uri": {"http://core/cb"}, "response_type": {"code"}, "state": {"s"}}
+	q := url.Values{"client_id": {"app"}, "redirect_uri": {"http://127.0.0.1:9/cb"}, "response_type": {"code"}, "state": {"s"}}
 	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := c.Get(authorizeURL + "?" + q.Encode())
 	if err != nil {
@@ -49,7 +49,7 @@ func TestMockStrava_WorkerRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	code := authorizeCode(t, stravaProviderMeta().OAuth.AuthorizeURL)
-	reply := auth.Exchange(ctx, workersdk.OAuthExchangeRequest{ClientID: "app", ClientSecret: "s", Code: code, RedirectURI: "http://core/cb"})
+	reply := auth.Exchange(ctx, workersdk.OAuthExchangeRequest{ClientID: "app", ClientSecret: "s", Code: code, RedirectURI: "http://127.0.0.1:9/cb"})
 	if reply.Error != "" || reply.ProviderAccountID != "4242" || reply.AccessToken == "" || reply.RefreshToken == "" {
 		t.Fatalf("exchange = %+v", reply)
 	}

@@ -15,6 +15,10 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errBody("Bad Request", "Application", "redirect_uri", "invalid"))
 		return
 	}
+	if !loopback.MatchString(redirect) {
+		writeJSON(w, http.StatusBadRequest, errBody("Bad Request", "Application", "redirect_uri", "invalid"))
+		return
+	}
 	if s.opts.ClientID != "" && q.Get("client_id") != s.opts.ClientID {
 		writeJSON(w, http.StatusBadRequest, errBody("Bad Request", "Application", "client_id", "invalid"))
 		return
@@ -36,7 +40,7 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 	if strings.Contains(redirect, "?") {
 		sep = "&"
 	}
-	http.Redirect(w, r, redirect+sep+params.Encode(), http.StatusFound) //nolint:gosec // G710: a mock OAuth server redirects wherever the client asked
+	http.Redirect(w, r, redirect+sep+params.Encode(), http.StatusFound) //nolint:gosec // G710: redirect_uri is a loopback URL (checked above)
 }
 
 // tokenReply is the token endpoint's success body.
