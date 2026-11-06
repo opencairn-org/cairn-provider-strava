@@ -50,6 +50,14 @@ func TestNonLoopbackTargetsRefused(t *testing.T) {
 		t.Errorf("subscription to a remote callback: %d", sub.StatusCode)
 	}
 
+	form.Set("callback_url", srv.URL+"/webhooks/x")
+	form.Set("verify_token", "no spaces & no ampersands")
+	tok := postForm(t, srv.URL+"/api/v3/push_subscriptions", form)
+	tok.Body.Close()
+	if tok.StatusCode != http.StatusBadRequest {
+		t.Errorf("subscription with a non-URL-safe verify token: %d", tok.StatusCode)
+	}
+
 	if _, _, err := s.EmitWebhook(context.Background(), "http://core.test/webhooks/x", "create", 1); err == nil {
 		t.Error("EmitWebhook to a remote URL: no error")
 	}

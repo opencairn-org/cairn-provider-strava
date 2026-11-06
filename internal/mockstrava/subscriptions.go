@@ -39,6 +39,10 @@ func (s *Server) createSubscription(w http.ResponseWriter, r *http.Request) {
 	if verify == "" {
 		verify = s.opts.VerifyToken
 	}
+	if !verifyToken.MatchString(verify) {
+		writeJSON(w, http.StatusBadRequest, errBody("Bad Request", "PushSubscription", "verify token", "invalid"))
+		return
+	}
 	if !s.handshake(r, callback, verify) {
 		writeJSON(w, http.StatusBadRequest, errBody("Bad Request", "PushSubscription", "callback url", "not verifiable"))
 		return
