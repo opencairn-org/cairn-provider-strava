@@ -5,11 +5,7 @@
 #
 # The worker builds on github.com/opencairn-org/cairn-provider-sdk-go, which
 # carries the Cairn proto stubs, so the build is a plain `go build` with NO
-# buf / proto-generation step. Until the SDK is published, go.mod replaces the
-# module with a local checkout; the image build gets it as a second build
-# context (`make image` passes --build-context sdk=../cairn-provider-sdk-go)
-# and rewrites the replace to /sdk. Drop the context and the go mod edit once
-# the SDK is published.
+# buf / proto-generation step.
 #
 # The build stage uses the shared cairn-build-base toolchain image by default
 # (pinned Go, matching cairn-core). Override BUILD_BASE to decouple from the
@@ -27,11 +23,9 @@ ARG BUILD_BASE=ghcr.io/opencairn-org/cairn-build-base:1
 FROM ${BUILD_BASE} AS build
 
 WORKDIR /src
-COPY --from=sdk / /sdk
 COPY go.mod go.sum ./
-RUN go mod edit -replace github.com/opencairn-org/cairn-provider-sdk-go=/sdk && go mod download
+RUN go mod download
 COPY . .
-RUN go mod edit -replace github.com/opencairn-org/cairn-provider-sdk-go=/sdk
 
 ARG VERSION=docker
 # -trimpath and an empty build id keep the binary reproducible.

@@ -31,14 +31,13 @@ which implements the contract (NATS subjects, job and result shapes, the
 proto stubs) and the worker loop; this repository holds only the Strava
 client, the mapping and the handlers. There is no Go-code dependency on
 cairn-core and no buf / proto-generation step at build time: a proto change
-is a new SDK release. Until the SDK is published, `go.mod` replaces the
-module with a sibling checkout (`../cairn-provider-sdk-go`).
+is a new SDK release. The SDK's major.minor follows cairn-core's, and so
+does this worker's: 0.7.x runs against core 0.7.
 
 The Docker build uses the shared `cairn-build-base` toolchain image by
 default (pinned Go 1.26, consistent with cairn-core). That's only a *toolchain*
 dependency, and it's overridable — build with zero coupling to the core image
-via `docker build --build-arg BUILD_BASE=golang:1.26-alpine .`. `make image`
-passes the SDK checkout as a second build context (`SDK_DIR`).
+via `docker build --build-arg BUILD_BASE=golang:1.26-alpine .`.
 
 ## Layout
 
