@@ -75,7 +75,7 @@ func postJSON(t *testing.T, u string, v any) *http.Response {
 // connect runs authorize → code → token and returns the token reply.
 func connect(t *testing.T, base string) tokenReply {
 	t.Helper()
-	q := url.Values{"client_id": {"app"}, "redirect_uri": {"http://core.test/cb?x=1"}, "response_type": {"code"},
+	q := url.Values{"client_id": {"app"}, "redirect_uri": {"http://127.0.0.1:9/cb?x=1"}, "response_type": {"code"},
 		"scope": {Scope}, "state": {"st"}, "approval_prompt": {"force"}}
 	resp, err := noRedirect().Get(base + "/oauth/authorize?" + q.Encode())
 	if err != nil {
@@ -86,11 +86,11 @@ func connect(t *testing.T, base string) tokenReply {
 		t.Fatalf("authorize status %d", resp.StatusCode)
 	}
 	loc, err := url.Parse(resp.Header.Get("Location"))
-	if err != nil || loc.Host != "core.test" || loc.Query().Get("state") != "st" || loc.Query().Get("code") == "" || loc.Query().Get("x") != "1" {
+	if err != nil || loc.Host != "127.0.0.1:9" || loc.Query().Get("state") != "st" || loc.Query().Get("code") == "" || loc.Query().Get("x") != "1" {
 		t.Fatalf("redirect = %s (%v)", resp.Header.Get("Location"), err)
 	}
 	form := url.Values{"client_id": {"app"}, "client_secret": {"s"}, "grant_type": {"authorization_code"},
-		"code": {loc.Query().Get("code")}, "redirect_uri": {"http://core.test/cb"}}
+		"code": {loc.Query().Get("code")}, "redirect_uri": {"http://127.0.0.1:9/cb"}}
 	tr := postForm(t, base+"/oauth/token", form)
 	if tr.StatusCode != http.StatusOK {
 		t.Fatalf("token status %d", tr.StatusCode)
@@ -163,7 +163,7 @@ func TestOAuthFlow(t *testing.T) {
 
 func TestOAuthClientCredentials(t *testing.T) {
 	_, srv := start(t, Options{ClientID: "id1", ClientSecret: "sec"})
-	q := url.Values{"client_id": {"other"}, "redirect_uri": {"http://x/cb"}, "response_type": {"code"}}
+	q := url.Values{"client_id": {"other"}, "redirect_uri": {"http://localhost/cb"}, "response_type": {"code"}}
 	resp, err := noRedirect().Get(srv.URL + "/oauth/authorize?" + q.Encode())
 	if err != nil {
 		t.Fatal(err)

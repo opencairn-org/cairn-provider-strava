@@ -31,6 +31,10 @@ func (s *Server) createSubscription(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errBody("Bad Request", "PushSubscription", "callback url", "required"))
 		return
 	}
+	if !loopback.MatchString(callback) {
+		writeJSON(w, http.StatusBadRequest, errBody("Bad Request", "PushSubscription", "callback url", "invalid"))
+		return
+	}
 	verify := r.Form.Get("verify_token")
 	if verify == "" {
 		verify = s.opts.VerifyToken
@@ -56,7 +60,7 @@ func (s *Server) handshake(r *http.Request, callback, verify string) bool {
 	if u, err := url.Parse(callback); err == nil && u.RawQuery != "" {
 		sep = "&"
 	}
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, callback+sep+q.Encode(), nil) //nolint:gosec // G704: the handshake calls the subscriber back by design
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, callback+sep+q.Encode(), nil) //nolint:gosec // G704: the subscriber's loopback callback, by design
 	if err != nil {
 		return false
 	}
