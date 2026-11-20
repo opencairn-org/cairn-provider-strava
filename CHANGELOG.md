@@ -6,6 +6,20 @@ to follow [Semantic Versioning](https://semver.org/). Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [0.7.2] — 2026-11-20
+
+Built on [cairn-provider-sdk-go](https://github.com/opencairn-org/cairn-provider-sdk-go)
+v0.7.2, released after cairn-core 0.7.3. Works with any core 0.7. No change
+to the worker's behaviour or configuration.
+
+### Security
+- The image is compiled with Go 1.27.4, the Go of the build-base image since
+  cairn-core 0.7.3. It fixes a crash of HTTP/1 servers caused by a header
+  race in `net/http`'s `MaxBytesReader` (GO-2026-6859, CVE-2026-97054); the
+  toolchain line of `go.mod` is 1.26.11, which carries the same fix.
+- `golang.org/x/crypto` 0.59.0 (GO-2026-5932, the unmaintained `openpgp`
+  package), an indirect dependency.
+
 ## [0.7.1] — 2026-11-06
 
 Built on [cairn-provider-sdk-go](https://github.com/opencairn-org/cairn-provider-sdk-go)
