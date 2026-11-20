@@ -21,6 +21,8 @@ GO_LICENSES_VERSION ?= v2.0.1
 FLEETLINT_VERSION   ?= v0.8.1
 # Tools are built with this module's toolchain: golangci-lint refuses code that targets a newer Go than it was built with.
 TOOLCHAIN   := $(shell go env GOVERSION)
+# fleetlint is the exception: it reads the repository and compiles none of it, so it is built with the Go its own
+# go.mod asks for (1.27 since v0.10.1), which GOTOOLCHAIN=auto fetches where CI pins GOTOOLCHAIN=local.
 
 .PHONY: help tools fmt lint vet test cover audit bench build image dist check-fast check release tidy clean
 
@@ -31,7 +33,7 @@ tools: ## install the pinned Go tools the gates use (gitleaks comes from its own
 	GOTOOLCHAIN=$(TOOLCHAIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
 	GOTOOLCHAIN=$(TOOLCHAIN) go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
 	GOTOOLCHAIN=$(TOOLCHAIN) go install github.com/google/go-licenses/v2@$(GO_LICENSES_VERSION)
-	go install github.com/fleetlint/fleetlint/cmd/fleetlint@$(FLEETLINT_VERSION)
+	GOTOOLCHAIN=auto go install github.com/fleetlint/fleetlint/cmd/fleetlint@$(FLEETLINT_VERSION)
 
 fmt: ## format in place
 	golangci-lint fmt
