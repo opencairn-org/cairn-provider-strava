@@ -5,7 +5,7 @@ go 1.26.0
 toolchain go1.26.11
 
 require (
-	github.com/opencairn-org/cairn-provider-sdk-go v0.7.1
+	github.com/opencairn-org/cairn-provider-sdk-go v0.7.2
 	google.golang.org/protobuf v1.36.12
 )
 
