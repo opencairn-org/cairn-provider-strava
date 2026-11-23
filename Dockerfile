@@ -17,7 +17,7 @@
 # enrollment token (auth-callout); for the local dev stack it connects
 # without one (workersdk.Connect).
 
-ARG BUILD_BASE=ghcr.io/opencairn-org/cairn-build-base:1
+ARG BUILD_BASE=ghcr.io/opencairn-org/cairn-build-base:1@sha256:995d02b5c8668dd1aa38e8a2b33fde102650974544db362a624071a6d5bbfa66
 
 # ---- build stage ----------------------------------------------------------
 FROM ${BUILD_BASE} AS build
